@@ -1,0 +1,70 @@
+# ============================================================================
+# AI Stock Analysis Platform - Python Dependencies
+# ============================================================================
+
+# --- Core Framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# --- Async & Event ---
+httpx==0.28.1
+aiofiles==24.1.0
+websockets==14.1
+
+# --- Database ---
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+psycopg2-binary==2.9.10
+
+# --- Cache & Message Queue ---
+redis==5.2.1
+celery==5.4.0
+kombu==5.4.2
+
+# --- AI / LLM ---
+litellm>=1.50
+openai>=1.50
+langchain>=0.3,<0.4
+langchain-openai>=0.3
+langgraph>=0.2,<0.3
+
+# --- Data Processing ---
+pandas>=2.0,<3
+numpy>=1.24,<2
+polars>=1.0,<2
+
+# --- Technical Indicators ---
+# TA-Lib requires C library: brew install ta-lib (macOS) / apt install libta-lib0 (Linux)
+TA-Lib>=0.4.28
+
+# --- Financial Data Sources ---
+akshare>=1.14
+tushare>=1.4
+yfinance>=0.2.40
+# efinance>=0.5  # optional, uncomment if needed
+
+# --- NLP & Text ---
+jieba>=0.42
+snownlp>=0.12
+
+# --- Vector Database ---
+# chromadb>=0.5  # optional, heavy install; uncomment if using vector search
+
+# --- Security ---
+cryptography==44.0.0
+pyjwt==2.10.1
+passlib[bcrypt]==1.7.4
+
+# --- Monitoring ---
+prometheus-fastapi-instrumentator==7.0.1
+prometheus-client==0.21.1
+
+# --- Utilities ---
+python-dotenv==1.0.1
+loguru==0.7.3
+httptools==0.6.4
+python-multipart==0.0.18
+schedule==1.2.2

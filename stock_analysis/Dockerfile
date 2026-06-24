@@ -1,0 +1,36 @@
+# ============================================================================
+# AI Stock Analysis Platform - Dockerfile
+# ============================================================================
+FROM python:3.11-slim
+
+# System dependencies for TA-Lib
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ make wget unzip \
+    libta-lib0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install TA-Lib C library
+RUN wget -q http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
+    && tar -xzf ta-lib-0.4.0-src.tar.gz \
+    && cd ta-lib \
+    && ./configure --prefix=/usr \
+    && make \
+    && make install \
+    && cd .. \
+    && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+
+WORKDIR /app
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application
+COPY . .
+
+# Create directories
+RUN mkdir -p /app/logs /app/data
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
