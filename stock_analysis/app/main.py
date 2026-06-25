@@ -13,7 +13,6 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import get_settings
 from app.database import init_db, close_db
@@ -89,38 +88,118 @@ app.add_middleware(
 )
 
 
-# ── Request Logging Middleware ───────────────────────────────────────────────
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log every HTTP request with method, path, status, and latency."""
+# ── Request / Response Logging Middleware (ASGI) ────────────────────────────
+_MAX_BODY_LOG = 2000  # 截断超过 2KB 的 body，避免控制台被刷屏
 
-    async def dispatch(self, request: Request, call_next):
-        start_time = time.monotonic()
-        method = request.method
-        path = request.url.path
-        query = request.url.query
-        client = request.client.host if request.client else "unknown"
 
-        # Log request start
-        qs = f"?{query}" if query else ""
-        logger.info(f"--> {method} {path}{qs}  | client={client}")
+def _safe_decode(b: bytes) -> str:
+    """Best-effort UTF-8 decode; fall back to hex for binary payloads."""
+    if not b:
+        return ""
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"<binary {len(b)} bytes>: {b[:64].hex()}"
+
+
+class RequestResponseLoggingMiddleware:
+    """Pure ASGI middleware that logs request line, request body, response
+    status, latency and response body. Works with both FastAPI handlers and
+    mounted sub-apps (e.g. /docs, /ui)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start = time.monotonic()
+        method = scope.get("method", "?")
+        path = scope.get("path", "?")
+        raw_qs = scope.get("query_string", b"").decode("latin-1")
+        full_path = f"{path}?{raw_qs}" if raw_qs else path
+        client_host = (scope.get("client") or ["unknown"])[0]
+
+        # ── 收集请求体 ──────────────────────────────────────────────
+        req_chunks: list[bytes] = []
+
+        async def receive_wrapper():
+            message = await receive()
+            if message.get("type") == "http.request":
+                chunk = message.get("body", b"") or b""
+                if chunk:
+                    req_chunks.append(chunk)
+            return message
+
+        # ── 收集响应体 ──────────────────────────────────────────────
+        status_holder = {"code": 500}
+        resp_chunks: list[bytes] = []
+
+        async def send_wrapper(message):
+            if message.get("type") == "http.response.start":
+                status_holder["code"] = message.get("status", 500)
+            elif message.get("type") == "http.response.body":
+                chunk = message.get("body", b"") or b""
+                if chunk:
+                    resp_chunks.append(chunk)
+            await send(message)
+
+        # ── 跳过明显的静态/健康探活噪音（可按需调整）────────────────
+        skip_paths = ("/health", "/docs", "/openapi.json", "/redoc")
+        is_skippable = path in skip_paths
+
+        if not is_skippable:
+            logger.info(f"--> {method} {full_path}  | client={client_host}")
+        else:
+            logger.debug(f"--> {method} {full_path}  | client={client_host}")
 
         try:
-            response = await call_next(request)
-            elapsed_ms = (time.monotonic() - start_time) * 1000
-            status_code = response.status_code
-            logger.info(
-                f"<-- {method} {path}  | {status_code}  | {elapsed_ms:.1f}ms"
-            )
-            return response
+            await self.app(scope, receive_wrapper, send_wrapper)
         except Exception as exc:
-            elapsed_ms = (time.monotonic() - start_time) * 1000
+            elapsed_ms = (time.monotonic() - start) * 1000
             logger.error(
-                f"<-- {method} {path}  | 500  | {elapsed_ms:.1f}ms  | ERROR: {exc}"
+                f"<-- {method} {full_path}  | 500  | {elapsed_ms:.1f}ms  | "
+                f"ERROR: {exc}",
+                exc_info=True,
             )
             raise
 
+        elapsed_ms = (time.monotonic() - start) * 1000
+        status_code = status_holder["code"]
+        req_body = b"".join(req_chunks)
+        resp_body = b"".join(resp_chunks)
 
-app.add_middleware(RequestLoggingMiddleware)
+        # 截断过长的 body
+        req_text = _safe_decode(req_body)
+        if len(req_text) > _MAX_BODY_LOG:
+            req_text = req_text[:_MAX_BODY_LOG] + f"... <truncated, total {len(req_body)} bytes>"
+
+        resp_text = _safe_decode(resp_body)
+        if len(resp_text) > _MAX_BODY_LOG:
+            resp_text = resp_text[:_MAX_BODY_LOG] + f"... <truncated, total {len(resp_body)} bytes>"
+
+        if is_skippable:
+            # 静态/健康探活只打 DEBUG 摘要
+            logger.debug(
+                f"<-- {method} {full_path}  | {status_code}  | {elapsed_ms:.1f}ms"
+            )
+            return
+
+        # 单行汇总
+        logger.info(
+            f"<-- {method} {full_path}  | {status_code}  | {elapsed_ms:.1f}ms"
+        )
+        # 单独打印请求体（多行 JSON 时保留缩进）
+        if req_text:
+            logger.info(f"    request_body  : {req_text}")
+        # 单独打印返回体
+        if resp_text:
+            logger.info(f"    response_body : {resp_text}")
+
+
+app.add_middleware(RequestResponseLoggingMiddleware)
 
 
 @app.exception_handler(Exception)

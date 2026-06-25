@@ -2650,7 +2650,9 @@
   // ==========================================================================
   // API Integration Layer — 对接后端 FastAPI
   // ==========================================================================
-  const API_BASE = 'http://localhost:3000';  // FastAPI backend (CORS enabled)
+  // 相对路径调用后端（同源，不需要 CORS，部署到任何环境都对）
+  // 后端默认端口是 8000（uvicorn app.main:app --port 8000）
+  const API_BASE = window.location.origin.includes(':3000') ? 'http://localhost:8000' : '';
 
   // -- API Client --
   const API = {
