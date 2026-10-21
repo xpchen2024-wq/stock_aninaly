@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, List
 
 from sqlalchemy import (
@@ -23,7 +23,13 @@ def new_uuid() -> str:
 
 
 def now_utc() -> datetime:
-    return datetime.utcnow()
+    """Naive UTC timestamp.
+
+    All PostgreSQL columns are TIMESTAMP WITHOUT TIME ZONE; asyncpg rejects
+    tz-aware values for them. Store UTC with tzinfo stripped so wall-clock
+    values stay comparable across drivers.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # -- User ---------------------------------------------------------------------
@@ -177,6 +183,7 @@ class NewsArticle(Base):
     collected_at = Column(DateTime, default=now_utc, nullable=False)
     related_stocks = Column(JSON, nullable=True)          # [{symbol, name, relevance}]
     topic_tags = Column(JSON, nullable=True)              # ["AI芯片", "新能源"]
+    tag_source = Column(String(16), nullable=True)        # keyword / llm（打标来源）
     sentiment = Column(String(16), nullable=True)         # positive / neutral / negative
     heat_score = Column(Float, nullable=True)
     is_archived = Column(Boolean, default=False, nullable=False)
@@ -383,4 +390,64 @@ class AuditLog(Base):
     detail = Column(JSON, nullable=True)
     ip_address = Column(String(64), nullable=True)
     correlation_id = Column(String(64), nullable=True, index=True)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+
+# -- Decision Outcome Evaluation ----------------------------------------------
+class DecisionEvaluation(Base):
+    """Retrospective scoring of AgentDecision against actual price movement.
+
+    Closes the loop: every directional decision (buy/sell) is compared with the
+    real price change N trading days later, producing hit/miss accuracy stats
+    for the agent pipeline.
+    """
+    __tablename__ = "decision_evaluations"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    session_id = Column(String(64), nullable=False, index=True)
+    symbol = Column(String(32), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+
+    predicted_direction = Column(String(16), nullable=False)   # buy → up / sell → down
+    horizon_days = Column(Integer, nullable=False)
+
+    baseline_date = Column(Date, nullable=False)
+    baseline_price = Column(Float, nullable=False)
+    target_date = Column(Date, nullable=False)
+    target_price = Column(Float, nullable=False)
+
+    actual_change_pct = Column(Float, nullable=False)
+    hit = Column(Boolean, nullable=False)
+
+    approval_status = Column(String(16), nullable=True)
+    evaluated_at = Column(DateTime, default=now_utc, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_decision_evaluation_session"),
+        Index("ix_decision_eval_hit", "hit"),
+    )
+
+
+# -- Strategy Backtest Records -------------------------------------------------
+class BacktestRecord(Base):
+    """Persisted backtest runs so 历史回测 can list and compare results."""
+    __tablename__ = "backtest_records"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    symbol = Column(String(32), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    strategy = Column(String(32), nullable=False)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+
+    initial_capital = Column(Float, nullable=False)
+    final_equity = Column(Float, nullable=False)
+    total_return_pct = Column(Float, nullable=False)
+    annualized_return_pct = Column(Float, nullable=True)
+    max_drawdown_pct = Column(Float, nullable=True)
+    sharpe_ratio = Column(Float, nullable=True)
+    win_rate_pct = Column(Float, nullable=True)
+    trade_count = Column(Integer, nullable=True)
+
+    params_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=now_utc, nullable=False)

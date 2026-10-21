@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS news_articles (
     collected_at    TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     related_stocks  JSONB,                     -- [{symbol, name, relevance}]
     topic_tags      JSONB,                     -- ["AI芯片", "新能源"]
+    tag_source      VARCHAR(16),               -- keyword / llm（打标来源）
     sentiment       VARCHAR(16),               -- positive / neutral / negative
     heat_score      DOUBLE PRECISION,
     is_archived     BOOLEAN DEFAULT FALSE NOT NULL

@@ -83,6 +83,8 @@ class ReportListResponse(BaseModel):
     id: str
     broker: str
     title: str
+    content: Optional[str] = None
+    core_opinion: Optional[str] = None
     stock_symbol: Optional[str]
     stock_name: Optional[str]
     rating: Optional[str]
@@ -212,12 +214,22 @@ async def list_reports(
     return [
         ReportListResponse(
             id=str(r.id), broker=r.broker, title=r.title,
+            content=r.content, core_opinion=r.core_opinion,
             stock_symbol=r.stock_symbol, stock_name=r.stock_name,
             rating=r.rating, target_price=r.target_price,
             published_at=r.published_at.isoformat() if r.published_at else "",
         )
         for r in reports
     ]
+
+
+@router.post("/reports/resync-targets")
+async def resync_report_targets(db: AsyncSession = Depends(get_db)):
+    """Re-derive report target prices from live quotes (keeps rating/target consistent)."""
+    from app.reports import resync_report_targets as _resync
+
+    updated = await _resync(db)
+    return {"updated": updated, "message": f"已按最新行情重算 {updated} 条目标价"}
 
 
 @router.get("/conclusions", response_model=List[ConclusionResponse])

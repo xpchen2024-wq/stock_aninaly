@@ -16,6 +16,7 @@ import pandas as pd
 from app.adapters import FailoverManager, DataType, KlineData, RealtimeQuote
 from app.indicators import compute_all_indicators
 from app.model_gateway import ModelGateway, LLMResponse
+from app.utils.json_extract import parse_llm_json
 from app.cache import (
     cache_realtime_quote, get_cached_quote,
     cache_hot_topics, get_cached_hot_topics,
@@ -123,12 +124,13 @@ class TrendAnalysisEngine:
 - ATR(14): {indicators.get('atr_14', 'N/A')}
 - 成交量: 最近量比={indicators.get('volume_ratio', 'N/A')}
 
-## 请输出：
-1. **趋势判断**（看涨/看跌/震荡）及置信度（高/中/低）
-2. **关键支撑位**和**阻力位**
-3. **识别到的技术形态**
-4. **判断依据**（列举2-3个关键技术信号）
-5. **风险提示**
+## 输出要求（严格 JSON，不要输出任何其他文字）：
+{{"trend_direction": "bullish/bearish/sideways",
+ "confidence": "high/medium/low",
+ "support_level": 数值或null,
+ "resistance_level": 数值或null,
+ "patterns": ["形态1", "形态2"],
+ "reasoning": "2-3个关键技术信号依据"}}
 """
         # 4. Call AI model
         response = await self.gateway.chat(
@@ -136,19 +138,50 @@ class TrendAnalysisEngine:
             max_tokens=1000,
         )
 
-        # 5. Parse trend direction from response
+        # 5. Parse structured output
         content = response.content if response.success else ""
-        trend_direction = "sideways"
-        if "看涨" in content and "看跌" not in content:
-            trend_direction = "bullish"
-        elif "看跌" in content:
-            trend_direction = "bearish"
+        parsed = parse_llm_json(content)
 
-        confidence = "medium"
-        if "高置信" in content or "高 置信" in content:
-            confidence = "high"
-        elif "低置信" in content or "低 置信" in content:
-            confidence = "low"
+        if isinstance(parsed, dict):
+            trend_direction = parsed.get("trend_direction", "sideways")
+            if trend_direction not in ("bullish", "bearish", "sideways"):
+                trend_direction = "sideways"
+            confidence = parsed.get("confidence", "medium")
+            if confidence not in ("high", "medium", "low"):
+                confidence = "medium"
+            support_level = parsed.get("support_level")
+            resistance_level = parsed.get("resistance_level")
+            patterns = [str(p) for p in (parsed.get("patterns") or [])][:6]
+            reasoning = str(parsed.get("reasoning", "") or "")
+
+            conclusion_lines = []
+            label = {"bullish": "看涨", "bearish": "看跌"}.get(trend_direction, "震荡")
+            conclusion_lines.append(f"**趋势判断**：{label}（置信度：{confidence}）")
+            if support_level is not None:
+                conclusion_lines.append(f"**关键支撑位**：{support_level}")
+            if resistance_level is not None:
+                conclusion_lines.append(f"**关键阻力位**：{resistance_level}")
+            if patterns:
+                conclusion_lines.append("**技术形态**：" + "、".join(patterns))
+            if reasoning:
+                conclusion_lines.append(f"**判断依据**：{reasoning}")
+            ai_conclusion = "\n\n".join(conclusion_lines) if conclusion_lines else content
+        else:
+            trend_direction = "sideways"
+            if "看涨" in content and "看跌" not in content:
+                trend_direction = "bullish"
+            elif "看跌" in content:
+                trend_direction = "bearish"
+
+            confidence = "medium"
+            if "高置信" in content or "高 置信" in content:
+                confidence = "high"
+            elif "低置信" in content or "低 置信" in content:
+                confidence = "low"
+
+            support_level = None
+            resistance_level = None
+            ai_conclusion = content
 
         return {
             "symbol": symbol,
@@ -156,10 +189,10 @@ class TrendAnalysisEngine:
             "frequency": frequency,
             "trend_direction": trend_direction,
             "confidence": confidence,
-            "ai_conclusion": content,
+            "ai_conclusion": ai_conclusion,
             "raw_indicators": indicators,
-            "support_level": None,
-            "resistance_level": None,
+            "support_level": support_level,
+            "resistance_level": resistance_level,
         }
 
 
@@ -444,17 +477,9 @@ class KOLEngine:
             max_tokens=500,
         )
         if resp.success and resp.content:
-            try:
-                import json
-                # Try to extract JSON from response
-                content = resp.content.strip()
-                if "```" in content:
-                    content = content.split("```")[1]
-                    if content.startswith("json"):
-                        content = content[4:]
-                return json.loads(content)
-            except (json.JSONDecodeError, IndexError):
-                pass
+            parsed = parse_llm_json(resp.content)
+            if isinstance(parsed, dict) and "direction" in parsed:
+                return parsed
         return {
             "summary": raw_text[:150],
             "direction": "neutral",

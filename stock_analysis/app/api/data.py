@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, List
+import time
+from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,7 @@ from sqlalchemy import select, delete
 from app.database import get_db
 from app.adapters import DataType, FailoverManager, create_default_failover_manager
 from app.cache import cache_realtime_quote, get_cached_quote
+from app.quotes import QUOTE_HEADERS
 from app.config import get_settings
 from app.models import KlineCache, StockFundamental
 
@@ -263,31 +265,26 @@ async def _fetch_quote_tencent(symbol: str) -> Optional[dict]:
     Field indices (split by '~'):
       [1]=name, [2]=symbol, [3]=current_price, [4]=pre_close, [5]=open,
       [6]=volume (in 手/lots, 1 lot = 100 shares),
-      [30]=change_pct, [33]=high, [34]=low,
-      [32]=change_amount, [31]=high_52w?, [45]=market_cap(亿)
+      [31]=change_amount, [32]=change_pct, [33]=high, [34]=low
     """
+    from app.quotes import (
+        QUOTE_HEADERS, QUOTE_URL, parse_tencent_payload, to_tencent_symbol,
+    )
+
+    sym = str(symbol or "").strip()
+    tx_sym = to_tencent_symbol(sym)
+    if not tx_sym:
+        return None
+
     import httpx
 
-    sym = symbol.replace(".SH", "").replace(".SZ", "").strip()
-    if sym.startswith(("6", "9")):
-        tx_sym = f"sh{sym}"
-    else:
-        tx_sym = f"sz{sym}"
-
-    url = f"https://qt.gtimg.cn/q={tx_sym}"
-    async with httpx.AsyncClient(
-        timeout=6.0,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Referer": "https://gu.qq.com/",
-        },
-    ) as client:
+    url = QUOTE_URL.format(symbols=tx_sym)
+    async with httpx.AsyncClient(timeout=6.0, headers=QUOTE_HEADERS) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         text = resp.text
 
-    # Parse: v_sh000001="1~name~..."
-    if "=" not in text or "~\"" not in text and '~"' not in text:
+    if '="' not in text:
         return None
     try:
         payload = text.split('="', 1)[1].rstrip('";\n')
@@ -322,8 +319,7 @@ async def get_realtime_quote_batch(
 
     Returns dict keyed by symbol. Avoids N separate rate-limited calls.
     """
-    import asyncio
-    import httpx
+    from app.quotes import fetch_tencent_quotes
 
     sym_list = [s.strip() for s in symbols.split(",") if s.strip()][:50]
     if not sym_list:
@@ -340,61 +336,14 @@ async def get_realtime_quote_batch(
     if not missing:
         return results
 
-    # Build Tencent symbol list (one call returns all)
-    tx_syms = []
-    for sym in missing:
-        if sym.startswith(("6", "9")):
-            tx_syms.append(f"sh{sym}")
-        else:
-            tx_syms.append(f"sz{sym}")
-
-    url = f"https://qt.gtimg.cn/q={','.join(tx_syms)}"
-    try:
-        async with httpx.AsyncClient(
-            timeout=6.0,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                "Referer": "https://gu.qq.com/",
-            },
-        ) as client:
-            resp = await client.get(url)
-            text = resp.text
-    except Exception as e:
-        logger.warning(f"Tencent batch fetch failed: {e}")
-        return results
-
-    # Parse multiple lines: v_sh000001="...";v_sz000001="...";
-    for line in text.strip().split(";\n"):
-        line = line.strip()
-        if not line or '="' not in line:
-            continue
+    # One HTTP call for all missing symbols (SH/SZ/BJ/HK supported)
+    fetched = await fetch_tencent_quotes(missing)
+    for sym, quote in fetched.items():
+        results[sym] = quote
         try:
-            tx_sym = line.split("=")[0].replace("v_", "")
-            payload = line.split('="', 1)[1].rstrip('";\n')
-            fields = payload.split("~")
-            if len(fields) < 35:
-                continue
-            sym = fields[2]
-            volume_lots = float(fields[6]) if fields[6] else 0.0
-            quote = {
-                "symbol": sym, "name": fields[1] or sym,
-                "price": float(fields[3]) if fields[3] else 0.0,
-                "pre_close": float(fields[4]) if fields[4] else 0.0,
-                "open": float(fields[5]) if fields[5] else 0.0,
-                "volume": int(volume_lots * 100),
-                "change_pct": float(fields[32]) if fields[32] else 0.0,
-                "change_amount": float(fields[31]) if fields[31] else 0.0,
-                "high": float(fields[33]) if fields[33] else 0.0,
-                "low": float(fields[34]) if fields[34] else 0.0,
-            }
-            results[sym] = quote
-            try:
-                await cache_realtime_quote(sym, quote, ttl=120)
-            except Exception:
-                pass
-        except (ValueError, IndexError) as e:
-            logger.debug(f"Tencent batch parse error: {e}")
-            continue
+            await cache_realtime_quote(sym, quote, ttl=120)
+        except Exception:
+            pass
 
     return results
 
@@ -433,11 +382,45 @@ async def get_fundamental(
         raise HTTPException(status_code=502, detail=f"Fundamental fetch failed: {e}")
 
 
+_HEALTH_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_HEALTH_TTL = 120.0
+
+
+async def _probe_tencent() -> bool:
+    """Liveness probe for the primary quote source (qt.gtimg.cn)."""
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0, headers=QUOTE_HEADERS) as client:
+            resp = await client.get("https://qt.gtimg.cn/q=sh000001")
+            return resp.status_code == 200 and '="' in resp.text
+    except Exception:
+        return False
+
+
 @router.get("/health")
 async def data_source_health():
-    """Check health of all registered data sources."""
+    """Check health of all registered data sources.
+
+    The live probe can take tens of seconds (each source is contacted
+    separately), so the result is cached briefly — the header polls it on
+    every dashboard refresh.
+    """
+    now = time.time()
+    if _HEALTH_CACHE["data"] is not None and now - _HEALTH_CACHE["ts"] < _HEALTH_TTL:
+        return _HEALTH_CACHE["data"]
     manager = get_failover()
-    return await manager.health_check_all()
+    try:
+        data = await asyncio.wait_for(manager.health_check_all(), timeout=12.0)
+    except Exception as exc:
+        logger.warning(f"data source health check failed: {exc}")
+        data = _HEALTH_CACHE["data"] or {}
+    try:
+        data = {**data, "腾讯财经": await _probe_tencent()}
+    except Exception:
+        pass
+    _HEALTH_CACHE.update({"ts": now, "data": data})
+    return data
 
 
 # ============================================================================
@@ -553,79 +536,18 @@ async def get_market_indices():
     return results
 
 
-# -- Stock search cache (in-memory, refreshed every 1 hour) --
-_stock_list_cache: Optional[List[dict]] = None
-_stock_list_cache_time: Optional[float] = None
-CACHE_TTL_SECONDS = 3600  # 1 hour
-
-
-async def _get_stock_list() -> list:
-    """Get full stock list, with in-memory caching."""
-    global _stock_list_cache, _stock_list_cache_time
-    import asyncio, time
-
-    now = time.time()
-    if _stock_list_cache is not None and _stock_list_cache_time is not None:
-        if now - _stock_list_cache_time < CACHE_TTL_SECONDS:
-            return _stock_list_cache
-
-    import akshare as ak
-
-    loop = asyncio.get_event_loop()
-    df = None
-    errors = []
-
-    # Strategy 1: Use stock_info_a_code_name (static list)
-    try:
-        df = await loop.run_in_executor(None, lambda: ak.stock_info_a_code_name())
-    except Exception as e:
-        errors.append(f"code_name: {e}")
-
-    # Strategy 2: Fallback to stock_zh_a_spot_em
-    if df is None or df.empty:
-        try:
-            df = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: ak.stock_zh_a_spot_em()),
-                timeout=10.0,
-            )
-        except (asyncio.TimeoutError, Exception) as e:
-            errors.append(f"spot_em: {e}")
-
-    if df is None or df.empty:
-        logger.warning(f"All stock list strategies failed: {'; '.join(errors)}")
-        return []
-
-    code_col = next((c for c in ["代码", "code", "symbol"] if c in df.columns), None)
-    name_col = next((c for c in ["名称", "name", "证券简称"] if c in df.columns), None)
-
-    if not code_col or not name_col:
-        logger.warning(f"Unknown columns: {list(df.columns)[:10]}")
-        return []
-
-    results = []
-    for _, row in df.iterrows():
-        code = str(row[code_col])
-        name = str(row[name_col])
-        market = "SH" if code.startswith(("6", "9")) else "SZ"
-        results.append({"symbol": code, "name": name, "market": market})
-
-    _stock_list_cache = results
-    _stock_list_cache_time = now
-    logger.info(f"Stock list cached: {len(results)} stocks")
-    return results
-
-
+# -- Stock search -----------------------------------------------------------
+# 股票主数据（代码/名称）统一由 app/stocks.py 提供，Redis 缓存、多 worker 共享。
 @router.get("/search")
-async def search_stock(q: str = Query(..., min_length=1, description="Code or name")):
-    """Search stocks by code or name. Uses cached stock list."""
-    stock_list = await _get_stock_list()
+async def search_stock(
+    q: str = Query(..., min_length=1, description="股票代码或名称"),
+    limit: int = Query(20, ge=1, le=50, description="返回条数"),
+):
+    """按股票代码或名称搜索（支持 300750 / 300750.SZ / 宁德时代 / 宁德）。"""
+    from app.stocks import get_stock_list, search_in_list
+
+    stock_list = await get_stock_list()
     if not stock_list:
+        logger.warning("股票主数据为空，搜索无法返回结果")
         return []
-
-    q_lower = q.lower()
-    matched = [
-        s for s in stock_list
-        if q_lower in s["symbol"].lower() or q_lower in s["name"].lower()
-    ][:10]
-
-    return matched
+    return search_in_list(stock_list, q, limit=limit)

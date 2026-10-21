@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from uuid import uuid4
 
 from app.celery_app import celery_app
 from app.config import get_settings
-from app.database import async_session_factory
+from app.database import task_session
+from app.models import now_utc
 from app.models import (
     NewsArticle, HotTopic, KOL, KOLOpinion, KOLConsensus,
     AnalysisConclusion, KlineCache, StockFundamental,
@@ -31,7 +32,7 @@ async def _crawl_news():
     sources = ["财联社", "华尔街见闻", "新浪财经", "东方财富"]
     logger.info(f"Crawl news task started: sources={sources}")
 
-    async with async_session_factory() as db:
+    async with task_session() as db:
         for source_name in sources:
             try:
                 # AkShare provides stock news
@@ -70,6 +71,132 @@ async def _crawl_news():
                 await db.rollback()
 
 
+@celery_app.task(name="tag_news_topics")
+def tag_news_topics():
+    """为尚未打标签的新闻抽取题材标签与关联股票（HT-002 前置步骤）。
+
+    此前 news_articles.topic_tags 没有任何写入方，而 compute_hot_topics 依赖
+    topic_tags 分组聚合，导致热点榜恒为空。LLM 批量打标为主，关键词兜底为备。
+    """
+    import asyncio
+    asyncio.run(_tag_news_topics())
+
+
+async def _tag_news_topics():
+    """两级打标：
+
+    1) 关键词全量打标（题材词典 + 股票名匹配，0 成本、秒级）——保证热点榜永远有数据；
+    2) LLM 精标（每日限量、优先走免费模型）——给最新一批新闻更准的标签与关联个股。
+
+    免费模型额度是账号级共享 50 次/天，不限量的话一天就会被后台任务打光。
+    """
+    import asyncio
+    from sqlalchemy import select
+    from app.model_gateway import get_model_gateway
+    from app.news_tagging import (
+        LLM_BATCH_SIZE, LLM_CONCURRENCY, consume_llm_budget, get_llm_budget,
+        get_stock_index, keyword_tag, pick_free_config, tag_batch_with_llm,
+    )
+
+    async with task_session() as db:
+        cutoff = now_utc() - timedelta(hours=24)
+
+        # ── 第一级：关键词全量打标 ──
+        result = await db.execute(
+            select(NewsArticle)
+            .where(
+                NewsArticle.published_at >= cutoff,
+                NewsArticle.is_archived == False,
+                NewsArticle.tag_source.is_(None),
+            )
+            .order_by(NewsArticle.published_at.desc())
+            .limit(300)
+        )
+        articles = result.scalars().all()
+        if not articles:
+            logger.info("No untagged news found")
+            return
+
+        stock_index = await get_stock_index()
+        keyword_tagged = 0
+        for art in articles:
+            info = keyword_tag(art.title, stock_index)
+            if info.get("topic_tags"):
+                art.topic_tags = info["topic_tags"]
+                art.related_stocks = info.get("related_stocks") or []
+                art.sentiment = info.get("sentiment")
+                art.tag_source = "keyword"
+                keyword_tagged += 1
+        await db.commit()
+        logger.info(f"Keyword tagging done: {keyword_tagged}/{len(articles)} tagged")
+
+        # ── 第二级：LLM 精标（每日限量 + 免费模型优先）──
+        budget = await get_llm_budget()
+        if budget <= 0:
+            logger.info("Daily LLM budget exhausted — keyword tagging only this round")
+            return
+
+        refine_window = now_utc() - timedelta(hours=3)
+        result = await db.execute(
+            select(NewsArticle)
+            .where(
+                NewsArticle.published_at >= refine_window,
+                NewsArticle.tag_source == "keyword",
+            )
+            .order_by(NewsArticle.published_at.desc())
+            .limit(LLM_BATCH_SIZE * 3)
+        )
+        candidates = result.scalars().all()
+        if not candidates:
+            return
+
+        batches = [
+            candidates[i:i + LLM_BATCH_SIZE]
+            for i in range(0, len(candidates), LLM_BATCH_SIZE)
+        ]
+        affordable = min(len(batches), budget)
+        if affordable <= 0:
+            return
+        batches = batches[:affordable]
+        await consume_llm_budget(affordable)
+
+        gateway = get_model_gateway()
+        free_config_id = pick_free_config(gateway)
+        logger.info(
+            f"LLM refining {len(candidates)} news with {affordable} batch(es), "
+            f"free_model={'yes' if free_config_id else 'no'}, budget_left={budget - affordable}"
+        )
+
+        semaphore = asyncio.Semaphore(LLM_CONCURRENCY)
+
+        async def _run_batch(chunk):
+            async with semaphore:
+                return await tag_batch_with_llm(gateway, chunk, prefer_config_id=free_config_id)
+
+        batch_results = await asyncio.gather(
+            *[_run_batch(chunk) for chunk in batches],
+            return_exceptions=True,
+        )
+
+        refined = 0
+        for chunk, batch_result in zip(batches, batch_results):
+            if isinstance(batch_result, BaseException):
+                logger.warning(f"打标批次异常: {batch_result}")
+                continue
+            for art, info in zip(chunk, batch_result):
+                if info and info.get("topic_tags"):
+                    art.topic_tags = info["topic_tags"]
+                    if info.get("related_stocks"):
+                        art.related_stocks = info["related_stocks"]
+                    if info.get("sentiment"):
+                        art.sentiment = info["sentiment"]
+                    art.tag_source = "llm"
+                    refined += 1
+
+        await db.commit()
+        logger.info(f"LLM refine done: {refined}/{len(candidates)} refined")
+
+
 @celery_app.task(name="compute_hot_topics")
 def compute_hot_topics():
     """Compute hot topics ranking every 15 minutes (HT-002, HT-003)."""
@@ -78,11 +205,17 @@ def compute_hot_topics():
 
 
 async def _compute_hot_topics():
-    from sqlalchemy import select, func
+    from sqlalchemy import select, delete
+    from app.model_gateway import get_model_gateway
+    from app.engines import HotTopicEngine
     logger.info("Compute hot topics task started")
-    async with async_session_factory() as db:
+    async with task_session() as db:
+        # 清理已过期热点，避免历史数据无限堆积
+        await db.execute(delete(HotTopic).where(HotTopic.expires_at <= now_utc()))
+        await db.flush()
+
         # Group news by topic_tags and compute heat
-        cutoff = datetime.utcnow() - timedelta(hours=72)
+        cutoff = now_utc() - timedelta(hours=72)
         result = await db.execute(
             select(NewsArticle).where(
                 NewsArticle.published_at >= cutoff,
@@ -90,39 +223,85 @@ async def _compute_hot_topics():
             )
         )
         articles = result.scalars().all()
+        tagged = [a for a in articles if a.topic_tags]
+        logger.info(f"Compute hot topics: {len(articles)} articles, {len(tagged)} tagged")
 
-        topic_map = {}
-        for a in articles:
+        topic_map: dict = {}
+        for a in tagged:
             for tag in (a.topic_tags or []):
-                if tag not in topic_map:
-                    topic_map[tag] = {
-                        "name": tag, "count": 0, "stocks": [], "articles": [],
-                    }
-                topic_map[tag]["count"] += 1
-                topic_map[tag]["articles"].append(a.title)
+                info = topic_map.setdefault(tag, {"count": 0, "stocks": {}, "articles": []})
+                info["count"] += 1
+                if len(info["articles"]) < 10:
+                    info["articles"].append(a.title)
                 for s in (a.related_stocks or []):
-                    if s not in topic_map[tag]["stocks"]:
-                        topic_map[tag]["stocks"].append(s)
+                    if not isinstance(s, dict):
+                        continue
+                    key = s.get("symbol") or s.get("name")
+                    if key:
+                        info["stocks"][key] = s
 
-        # Compute heat index and save top topics
-        for tag, info in sorted(topic_map.items(), key=lambda x: x[1]["count"], reverse=True)[:10]:
+        # 已存在的热点按 topic_name 复用（upsert），避免每轮重复插入同一话题
+        existing = {
+            t.topic_name: t
+            for t in (await db.execute(select(HotTopic))).scalars().all()
+        }
+
+        top = sorted(topic_map.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
+        topic_objs = []
+        for tag, info in top:
             heat = HotTopicEngine.compute_heat_index(
-                info["count"], info["count"] / 10.0, 0.5
-            ) if hasattr(HotTopicEngine, 'compute_heat_index') else info["count"] * 10
-
-            topic = HotTopic(
-                id=str(uuid4()),
-                topic_name=info["name"],
-                description=f"{info['name']} - {info['count']}篇相关报道",
-                heat_index=heat,
-                news_count=info["count"],
-                related_stocks=info["stocks"][:10],
-                expires_at=datetime.utcnow() + timedelta(hours=24),
+                info["count"], min(info["count"] / 10.0, 1.0), 0.5,
             )
-            db.add(topic)
+            related = list(info["stocks"].values())[:10]
+            topic = existing.get(tag)
+            if topic is None:
+                topic = HotTopic(id=str(uuid4()), topic_name=tag)
+                db.add(topic)
+            topic.description = f"{tag} - {info['count']}篇相关报道"
+            topic.heat_index = heat
+            topic.news_count = info["count"]
+            topic.related_stocks = related
+            topic.generated_at = now_utc()
+            topic.expires_at = now_utc() + timedelta(hours=24)
+            topic_objs.append((topic, info))
+
+        await db.flush()
+
+        # 为热度前 5 的热点生成 AI 结论（AC-001）
+        # 限量：免费模型额度账号级共享 50 次/天，AI 结论每天最多生成 2 轮，
+        # 其余轮次沿用上一次的结论（热点排序仍每 15 分钟刷新）。
+        from app.cache import CacheManager
+        from app.news_tagging import CONCLUSION_ROUNDS_KEY, LLM_CONCLUSION_BUDGET
+
+        try:
+            rounds = int(await CacheManager.get(CONCLUSION_ROUNDS_KEY) or 0)
+        except Exception:
+            rounds = 0
+
+        if rounds < LLM_CONCLUSION_BUDGET:
+            gateway = get_model_gateway()
+            engine = HotTopicEngine(gateway)
+            for topic, info in topic_objs[:5]:
+                try:
+                    topic.ai_conclusion = await engine.generate_ai_conclusion(
+                        topic.topic_name, info["articles"], topic.related_stocks or [],
+                    )
+                except Exception as exc:
+                    logger.warning(f"AI 结论生成失败 topic={topic.topic_name}: {exc}")
+            try:
+                await CacheManager.set(
+                    CONCLUSION_ROUNDS_KEY, str(rounds + 1), 24 * 3600,
+                )
+            except Exception as exc:
+                logger.warning(f"写入热点结论轮次计数失败: {exc}")
+        else:
+            logger.info(
+                f"Hot topic AI conclusion daily budget reached ({rounds}/"
+                f"{LLM_CONCLUSION_BUDGET}), reusing previous conclusions"
+            )
 
         await db.commit()
-        logger.info(f"Computed {len(topic_map)} hot topics")
+        logger.info(f"Computed {len(topic_objs)} hot topics")
 
 
 @celery_app.task(name="crawl_kol_opinions")
@@ -142,7 +321,7 @@ async def _crawl_kol_opinions():
     from app.engines import KOLEngine
     logger.info("Crawl KOL opinions task started")
 
-    async with async_session_factory() as db:
+    async with task_session() as db:
         from sqlalchemy import select
         result = await db.execute(select(KOL).where(KOL.is_active == True))
         kols = result.scalars().all()
@@ -178,8 +357,8 @@ async def _generate_kol_consensus():
     from app.engines import KOLEngine
     logger.info("Generate KOL consensus task started")
 
-    async with async_session_factory() as db:
-        cutoff = datetime.utcnow() - timedelta(hours=48)
+    async with task_session() as db:
+        cutoff = now_utc() - timedelta(hours=48)
         result = await db.execute(
             select(KOLOpinion).where(KOLOpinion.published_at >= cutoff)
         )
@@ -229,9 +408,9 @@ def cleanup_expired_data():
 async def _cleanup_expired_data():
     from sqlalchemy import delete, select
     logger.info("Cleanup expired data task started")
-    async with async_session_factory() as db:
+    async with task_session() as db:
         # Archive news older than 72h
-        cutoff_news = datetime.utcnow() - timedelta(hours=72)
+        cutoff_news = now_utc() - timedelta(hours=72)
         from sqlalchemy import update
         await db.execute(
             update(NewsArticle)
@@ -240,7 +419,7 @@ async def _cleanup_expired_data():
         )
 
         # Delete KOL opinions older than 30 days
-        cutoff_kol = datetime.utcnow() - timedelta(days=30)
+        cutoff_kol = now_utc() - timedelta(days=30)
         await db.execute(
             delete(KOLOpinion).where(KOLOpinion.published_at < cutoff_kol)
         )
@@ -253,7 +432,7 @@ async def _cleanup_expired_data():
 
         # Delete expired hot topics
         await db.execute(
-            delete(HotTopic).where(HotTopic.expires_at < datetime.utcnow())
+            delete(HotTopic).where(HotTopic.expires_at < now_utc())
         )
 
         await db.commit()
@@ -273,7 +452,7 @@ async def _update_watchlist_cache():
     from app.adapters import create_default_failover_manager, DataType
     logger.info("Update watchlist cache task started")
 
-    async with async_session_factory() as db:
+    async with task_session() as db:
         result = await db.execute(select(WatchlistItem))
         items = result.scalars().all()
 
@@ -299,3 +478,20 @@ async def _update_watchlist_cache():
             except Exception as e:
                 logger.warning(f"Failed to update cache for {item.symbol}: {e}")
                 await db.rollback()
+
+
+@celery_app.task(name="evaluate_decisions")
+def evaluate_decisions(days: int = 5, limit: int = 100):
+    """Retrospectively score agent decisions against realized prices."""
+    import asyncio
+    asyncio.run(_evaluate_decisions(days=days, limit=limit))
+
+
+async def _evaluate_decisions(days: int = 5, limit: int = 100):
+    from app.api.evaluation import evaluate_pending_decisions
+    logger.info(f"Decision evaluation task started: days={days}, limit={limit}")
+    async with task_session() as db:
+        result = await evaluate_pending_decisions(days=days, limit=limit, db=db)
+        await db.commit()
+        logger.info(f"Decision evaluation task done: created={result['created']}, "
+                    f"skipped={len(result['skipped'])}")

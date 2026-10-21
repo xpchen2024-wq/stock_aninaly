@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import time
 import os
@@ -63,6 +64,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     await init_db()
     logger.info("Database initialized")
+    # 装载模型配置到网关，否则分析引擎/Agent 拿不到任何可用模型
+    try:
+        from app.model_gateway import load_configs_from_db
+        await load_configs_from_db()
+    except Exception as exc:
+        logger.error(f"Failed to load model configs at startup: {exc}", exc_info=True)
     yield
     logger.info("Shutting down...")
     await close_db()
@@ -78,11 +85,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS: 规范禁止 allow_credentials 与 "*" 组合，故仅显式来源列表时启用
+_cors_origins = settings.cors_origins_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=("*" not in _cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -100,6 +108,15 @@ def _safe_decode(b: bytes) -> str:
         return b.decode("utf-8")
     except UnicodeDecodeError:
         return f"<binary {len(b)} bytes>: {b[:64].hex()}"
+
+
+_SECRET_KEY_RE = re.compile(
+    r'("(?i:password|api_key|apikey|secret|token|authorization)"\s*:\s*)"[^"]*"'
+)
+
+
+def _mask_secrets(text: str) -> str:
+    return _SECRET_KEY_RE.sub(r'\1"***MASKED***"', text)
 
 
 class RequestResponseLoggingMiddleware:
@@ -171,12 +188,11 @@ class RequestResponseLoggingMiddleware:
         req_body = b"".join(req_chunks)
         resp_body = b"".join(resp_chunks)
 
-        # 截断过长的 body
-        req_text = _safe_decode(req_body)
+        req_text = _mask_secrets(_safe_decode(req_body))
         if len(req_text) > _MAX_BODY_LOG:
             req_text = req_text[:_MAX_BODY_LOG] + f"... <truncated, total {len(req_body)} bytes>"
 
-        resp_text = _safe_decode(resp_body)
+        resp_text = _mask_secrets(_safe_decode(resp_body))
         if len(resp_text) > _MAX_BODY_LOG:
             resp_text = resp_text[:_MAX_BODY_LOG] + f"... <truncated, total {len(resp_body)} bytes>"
 
@@ -248,7 +264,8 @@ async def health_check():
 from app.api import (
     data_router, model_router, analysis_router,
     agent_router, watchlist_router, news_router,
-    kol_router, auth_router,
+    kol_router, auth_router, evaluation_router, backtest_router,
+    capital_router, insight_router, forecast_router,
 )
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
@@ -259,8 +276,13 @@ app.include_router(agent_router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(watchlist_router, prefix="/api/v1/watchlist", tags=["Watchlist"])
 app.include_router(news_router, prefix="/api/v1/news", tags=["News"])
 app.include_router(kol_router, prefix="/api/v1/kol", tags=["KOL"])
+app.include_router(evaluation_router, prefix="/api/v1/evaluation", tags=["Evaluation"])
+app.include_router(backtest_router, prefix="/api/v1/backtest", tags=["Backtest"])
+app.include_router(capital_router, prefix="/api/v1/capital", tags=["Capital"])
+app.include_router(insight_router, prefix="/api/v1/insight", tags=["Insight"])
+app.include_router(forecast_router, prefix="/api/v1/forecast", tags=["Forecast"])
 
 logger.info(
     f"Routers registered: auth, data, models, analysis, agent, "
-    f"watchlist, news, kol"
+    f"watchlist, news, kol, evaluation, backtest, capital, insight"
 )

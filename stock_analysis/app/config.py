@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     PORT: int = 8000
     WORKERS: int = 4
 
+    # --- CORS ---
+    CORS_ORIGINS: str = "*"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()] or ["*"]
+
     # --- Database ---
     DATABASE_URL: str = "postgresql+asyncpg://stock_user:stock_pass@localhost:5432/stock_analysis"
     DATABASE_URL_SYNC: str = "postgresql://stock_user:stock_pass@localhost:5432/stock_analysis"

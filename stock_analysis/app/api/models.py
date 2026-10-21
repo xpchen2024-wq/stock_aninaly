@@ -8,7 +8,7 @@ from typing import Optional, List
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -21,6 +21,7 @@ from app.model_gateway import (
     encrypt_api_key, decrypt_api_key, mask_api_key,
     get_model_gateway,
 )
+from app.utils.errors import explain_llm_error_with_hint
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -65,6 +66,7 @@ class ModelConfigResponse(BaseModel):
     temperature: float
     is_default: bool
     is_enabled: bool
+    status: str = "active"
 
 
 class TestResult(BaseModel):
@@ -72,6 +74,8 @@ class TestResult(BaseModel):
     latency_ms: float
     model: str
     error: Optional[str] = None
+    raw_error: Optional[str] = None      # 原始英文错误，便于排查
+    hint: Optional[str] = None            # 可执行建议
 
 
 class BindingCreate(BaseModel):
@@ -82,14 +86,16 @@ class BindingCreate(BaseModel):
 
 # -- Routes --
 @router.get("", response_model=List[ModelConfigResponse])
-async def list_models(db: AsyncSession = Depends(get_db)):
-    """List all model configurations (AI-001)."""
-    logger.info("Listing all model configurations")
-    result = await db.execute(
-        select(ModelConfig)
-        .where(ModelConfig.status == "active")
-        .order_by(ModelConfig.created_at.desc())
-    )
+async def list_models(
+    include_deleted: bool = Query(False, description="是否包含已软删除的配置"),
+    db: AsyncSession = Depends(get_db),
+):
+    """List model configurations (AI-001)."""
+    logger.info(f"Listing model configurations (include_deleted={include_deleted})")
+    query = select(ModelConfig)
+    if not include_deleted:
+        query = query.where(ModelConfig.status == "active")
+    result = await db.execute(query.order_by(ModelConfig.created_at.desc()))
     configs = result.scalars().all()
     responses = []
     for c in configs:
@@ -102,6 +108,7 @@ async def list_models(db: AsyncSession = Depends(get_db)):
             base_url=c.base_url, api_key_masked=masked,
             model_name=c.model_name, max_tokens=c.max_tokens,
             temperature=c.temperature, is_default=c.is_default, is_enabled=c.is_enabled,
+            status=c.status,
         ))
     logger.info(f"Returned {len(responses)} model configs")
     return responses
@@ -128,6 +135,14 @@ async def create_model(req: ModelConfigCreate, db: AsyncSession = Depends(get_db
     db.add(config)
     await db.flush()
     logger.info(f"Model config created: id={config.id}, name={config.name}")
+    # 实时生效：同步注册到网关，避免必须重启进程才能用上新模型（AI-006）
+    try:
+        from app.model_gateway import register_model_config
+        register_model_config(get_model_gateway(), config, settings.ENCRYPTION_KEY)
+        if config.is_default:
+            get_model_gateway().set_default(str(config.id))
+    except Exception as exc:
+        logger.warning(f"Failed to register new model config in gateway: {exc}")
     return ModelConfigResponse(
         id=str(config.id), name=config.name, platform=config.platform,
         base_url=config.base_url, api_key_masked=mask_api_key(req.api_key),
@@ -308,6 +323,14 @@ async def update_model(config_id: str, req: ModelConfigUpdate, db: AsyncSession 
 
     await db.flush()
     logger.info(f"Model config updated: id={config_id}, changes={changes}")
+    # 实时生效：API Key / 模型名变更后同步刷新网关中的配置
+    try:
+        from app.model_gateway import register_model_config
+        register_model_config(get_model_gateway(), config, settings.ENCRYPTION_KEY)
+        if config.is_default:
+            get_model_gateway().set_default(str(config.id))
+    except Exception as exc:
+        logger.warning(f"Failed to sync updated model config to gateway: {exc}")
     try:
         masked = mask_api_key(decrypt_api_key(config.api_key_encrypted, settings.ENCRYPTION_KEY))
     except Exception:
@@ -336,6 +359,48 @@ async def delete_model(config_id: str, db: AsyncSession = Depends(get_db)):
     config.status = "deleted"
     logger.info(f"Model soft-deleted: name={config.name}, platform={config.platform}, model={config.model_name}")
     await db.flush()
+    try:
+        get_model_gateway().remove_config(str(config.id))
+    except Exception as exc:
+        logger.warning(f"Failed to remove model config from gateway: {exc}")
+
+
+@router.post("/{config_id}/restore", response_model=ModelConfigResponse)
+async def restore_model(config_id: str, db: AsyncSession = Depends(get_db)):
+    """Restore a soft-deleted model configuration."""
+    logger.info(f"Restoring model config: id={config_id}")
+    result = await db.execute(select(ModelConfig).where(ModelConfig.id == config_id))
+    config = result.scalar_one_or_none()
+    if not config:
+        raise HTTPException(status_code=404, detail="Model config not found")
+    if config.status == "active":
+        return ModelConfigResponse(
+            id=str(config.id), name=config.name, platform=config.platform,
+            base_url=config.base_url, api_key_masked="****",
+            model_name=config.model_name, max_tokens=config.max_tokens,
+            temperature=config.temperature, is_default=config.is_default,
+            is_enabled=config.is_enabled, status=config.status,
+        )
+    config.status = "active"
+    await db.flush()
+    try:
+        masked = mask_api_key(decrypt_api_key(config.api_key_encrypted, settings.ENCRYPTION_KEY))
+    except Exception:
+        masked = "****（请重新配置 API Key）"
+    # 同步注册回网关，使其立即可用
+    try:
+        from app.model_gateway import register_model_config
+        register_model_config(get_model_gateway(), config, settings.ENCRYPTION_KEY)
+    except Exception as exc:
+        logger.warning(f"恢复后注册网关失败: {exc}")
+    logger.info(f"Model config restored: id={config_id}, name={config.name}")
+    return ModelConfigResponse(
+        id=str(config.id), name=config.name, platform=config.platform,
+        base_url=config.base_url, api_key_masked=masked,
+        model_name=config.model_name, max_tokens=config.max_tokens,
+        temperature=config.temperature, is_default=config.is_default,
+        is_enabled=config.is_enabled, status=config.status,
+    )
 
 
 @router.post("/{config_id}/test", response_model=TestResult)
@@ -353,7 +418,10 @@ async def test_model(config_id: str, db: AsyncSession = Depends(get_db)):
         api_key = decrypt_api_key(config.api_key_encrypted, settings.ENCRYPTION_KEY)
     except Exception:
         api_key = ""
-    gateway.add_config(LLMConfig(
+
+    # 用 probe 而不是 test_connection：不写入网关、忽略停用标记，
+    # 这样已停用/已失效的配置也能测出真实原因（例如 API Key 过期）
+    test = await gateway.probe(LLMConfig(
         id=str(config.id), name=config.name,
         provider=LLMProvider(config.platform),
         base_url=config.base_url or "",
@@ -362,12 +430,18 @@ async def test_model(config_id: str, db: AsyncSession = Depends(get_db)):
         max_tokens=config.max_tokens, temperature=config.temperature,
         is_enabled=config.is_enabled,
     ))
-
-    test = await gateway.test_connection(str(config.id))
     logger.info(
         f"Model test result: config_id={config_id}, success={test.get('success')}, "
         f"latency={test.get('latency_ms', 'N/A')}ms"
     )
+
+    # 把英文原始错误翻译成中文原因 + 修复建议（原始信息保留在 raw_error）
+    raw_error = test.get("error")
+    if raw_error:
+        reason, hint = explain_llm_error_with_hint(raw_error)
+        test["error"] = reason
+        test["raw_error"] = str(raw_error)[:800]
+        test["hint"] = hint
     return TestResult(**test)
 
 
@@ -377,6 +451,10 @@ async def set_default_model(config_id: str, db: AsyncSession = Depends(get_db)):
     logger.info(f"Setting default model: config_id={config_id}")
     await db.execute(update(ModelConfig).values(is_default=False))
     await db.execute(update(ModelConfig).where(ModelConfig.id == config_id).values(is_default=True))
+    try:
+        get_model_gateway().set_default(str(config_id))
+    except Exception as exc:
+        logger.warning(f"Failed to set gateway default model: {exc}")
     logger.info(f"Default model set: config_id={config_id}")
 
 

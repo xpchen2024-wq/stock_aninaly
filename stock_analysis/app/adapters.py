@@ -281,6 +281,28 @@ class AkShareAdapter(BaseAdapter):
             ))
         return results
 
+    async def health_check(self) -> bool:
+        """Cheap liveness probe.
+
+        The inherited implementation pulls the *whole* A-share spot table
+        (59 paged requests), which takes ~60s and would block the UI's
+        data-source indicator. A single index daily bar is enough to prove
+        the source is reachable.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            # 指数日线走新浪源（~0.3s），比东财行情表稳定得多
+            df = await loop.run_in_executor(
+                None, lambda: ak.stock_zh_index_daily(symbol="sh000300")
+            )
+            ok = df is not None and not df.empty
+            self._healthy = bool(ok)
+            return self._healthy
+        except Exception as e:
+            self._healthy = False
+            self._last_error = str(e)
+            return False
+
     async def fetch_realtime_quote(self, symbol: str) -> Optional[RealtimeQuote]:
         try:
             loop = asyncio.get_event_loop()
@@ -630,11 +652,18 @@ class FailoverManager:
             f"Last error: {last_error}"
         )
 
-    async def health_check_all(self) -> Dict[str, bool]:
-        """Check health of all registered sources."""
-        results = {}
-        for name, adapter in self.adapters.items():
-            results[name] = await adapter.health_check()
+    async def health_check_all(self, timeout: float = 8.0) -> Dict[str, bool]:
+        """Check health of all registered sources (in parallel, bounded)."""
+        async def _one(name: str, adapter):
+            try:
+                return name, bool(await asyncio.wait_for(adapter.health_check(), timeout=timeout))
+            except Exception:
+                return name, False
+
+        results: Dict[str, bool] = {}
+        pairs = await asyncio.gather(*(_one(n, a) for n, a in self.adapters.items()))
+        for name, ok in pairs:
+            results[name] = ok
         return results
 
 

@@ -6,23 +6,37 @@ from __future__ import annotations
 import logging
 import math
 from typing import Optional, List
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_
 
 from app.database import get_db
 from app.config import get_settings
-from app.models import KOL, KOLOpinion, KOLConsensus
+from app.models import KOL, KOLOpinion, KOLConsensus, now_utc
 from app.model_gateway import get_model_gateway
 from app.engines import KOLEngine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 settings = get_settings()
+
+# -- KOL 方向归一化（中文/英文标签统一为 bullish/bearish/neutral） ----------
+_BULLISH_DIRS = {"看多", "bullish", "看涨", "bull", "buy", "positive"}
+_BEARISH_DIRS = {"看空", "bearish", "看跌", "bear", "sell", "negative"}
+
+
+def normalize_kol_direction(direction: str) -> str:
+    """Map a raw KOL direction label to bullish / bearish / neutral."""
+    d = str(direction or "").strip().lower()
+    if d in _BULLISH_DIRS:
+        return "bullish"
+    if d in _BEARISH_DIRS:
+        return "bearish"
+    return "neutral"
 
 
 # -- Schemas --
@@ -161,7 +175,7 @@ async def list_opinions(
         f"Listing KOL opinions: platform={platform or 'all'}, direction={direction or 'all'}, "
         f"hours={hours}, sort={sort_by}, limit={limit}"
     )
-    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    cutoff = now_utc() - timedelta(hours=hours)
 
     query = (
         select(KOLOpinion, KOL)
@@ -254,7 +268,7 @@ async def generate_consensus(
     """Generate today's KOL consensus (KV-005, AC-008)."""
     logger.info("Generating KOL consensus")
     # Fetch recent 48h opinions
-    cutoff = datetime.utcnow() - timedelta(hours=48)
+    cutoff = now_utc() - timedelta(hours=48)
     result = await db.execute(
         select(KOLOpinion).where(KOLOpinion.published_at >= cutoff)
     )
@@ -322,7 +336,7 @@ async def kol_stats(
 ):
     """KOL opinion stats overview for dashboard."""
     logger.info("Computing KOL stats overview")
-    cutoff_48h = datetime.utcnow() - timedelta(hours=48)
+    cutoff_48h = now_utc() - timedelta(hours=48)
 
     # Count KOLs
     douyin_count = await db.scalar(
@@ -387,7 +401,7 @@ async def kol_ranking(
     kols = result.scalars().all()
 
     # Get 48h opinion count and avg heat per KOL
-    cutoff = datetime.utcnow() - timedelta(hours=48)
+    cutoff = now_utc() - timedelta(hours=48)
     ranking = []
     for kol in kols:
         op_result = await db.execute(
@@ -438,7 +452,7 @@ async def cross_comparison(
     from app.models import TrendAnalysis, ResearchReport
 
     # 1. Aggregate KOL mentioned stocks in last 48h
-    cutoff = datetime.utcnow() - timedelta(hours=48)
+    cutoff = now_utc() - timedelta(hours=48)
     result = await db.execute(
         select(KOLOpinion).where(KOLOpinion.published_at >= cutoff)
     )
@@ -461,10 +475,10 @@ async def cross_comparison(
                 }
             sm = stock_mentions[code]
             sm["total_count"] += 1
-            direction = stock.get("direction", "")
-            if direction == "看多":
+            direction = normalize_kol_direction(stock.get("direction", ""))
+            if direction == "bullish":
                 sm["bullish_count"] += 1
-            elif direction == "看空":
+            elif direction == "bearish":
                 sm["bearish_count"] += 1
             else:
                 sm["neutral_count"] += 1
@@ -486,14 +500,21 @@ async def cross_comparison(
         )
         trend = trend_result.scalar_one_or_none()
 
-        # Latest research report
+        # Latest research report (stock_symbol stored with .SH/.SZ suffix)
+        bare = code.split(".")[0]
         report_result = await db.execute(
             select(ResearchReport)
-            .where(ResearchReport.stock_symbol == code)
+            .where(
+                or_(
+                    ResearchReport.stock_symbol == code,
+                    ResearchReport.stock_symbol == bare,
+                    ResearchReport.stock_symbol.like(f"{bare}.%"),
+                )
+            )
             .order_by(ResearchReport.published_at.desc())
             .limit(1)
         )
-        report = report_result.scalar_one_or_none()
+        report = report_result.scalars().first()
 
         # Determine KOL direction
         if sm["bullish_count"] > sm["bearish_count"]:
@@ -536,6 +557,27 @@ async def cross_comparison(
 
     # Sort by mention count desc
     comparisons.sort(key=lambda x: x["kol_mentions"], reverse=True)
+
+    # 批量取实时价格，用于展示研报目标价相对现价的空间
+    try:
+        from app.quotes import fetch_tencent_quotes
+        quotes = await fetch_tencent_quotes([c["symbol"] for c in comparisons])
+        for c in comparisons:
+            q = quotes.get(c["symbol"])
+            price = float(q.get("price") or 0) if q else 0.0
+            c["price"] = price or None
+            c["change_pct"] = float(q.get("change_pct") or 0) if q else None
+            target = c.get("report_target_price")
+            c["target_space_pct"] = (
+                round((float(target) / price - 1) * 100, 1)
+                if target and price > 0 else None
+            )
+    except Exception as exc:
+        logger.warning(f"cross-comparison quote fetch failed: {exc}")
+        for c in comparisons:
+            c.setdefault("price", None)
+            c.setdefault("change_pct", None)
+            c.setdefault("target_space_pct", None)
 
     logger.info(
         f"Cross-comparison computed: {len(comparisons)} stocks, "

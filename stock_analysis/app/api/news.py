@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -14,7 +14,7 @@ from sqlalchemy import select, func
 
 from app.database import get_db
 from app.config import get_settings
-from app.models import NewsArticle, HotTopic
+from app.models import NewsArticle, HotTopic, now_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -56,7 +56,7 @@ async def list_news(
 ):
     """List recent news articles (HT-001, HT-004: 72h window)."""
     logger.info(f"Listing news: source={source or 'all'}, hours={hours}, limit={limit}")
-    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    cutoff = now_utc() - timedelta(hours=hours)
     query = (
         select(NewsArticle)
         .where(
@@ -91,7 +91,7 @@ async def list_hot_topics(
 ):
     """List hot topics ranked by heat index (HT-002, HT-003)."""
     logger.info(f"Listing hot topics: limit={limit}")
-    now = datetime.utcnow()
+    now = now_utc()
     result = await db.execute(
         select(HotTopic)
         .where(HotTopic.expires_at > now)
@@ -142,7 +142,7 @@ async def get_news_detail(news_id: str, db: AsyncSession = Depends(get_db)):
 async def news_stats(db: AsyncSession = Depends(get_db)):
     """News statistics summary."""
     logger.info("Computing news stats summary")
-    cutoff = datetime.utcnow() - timedelta(hours=72)
+    cutoff = now_utc() - timedelta(hours=72)
     total = await db.scalar(
         select(func.count(NewsArticle.id)).where(
             NewsArticle.published_at >= cutoff,

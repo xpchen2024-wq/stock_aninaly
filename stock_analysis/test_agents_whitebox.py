@@ -25,6 +25,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 
 from app.agents import (
@@ -667,7 +668,9 @@ class TestAgentWorkflow:
         """Create gateway that returns responses in sequence.
         Order in run():
           [fundamental, sentiment, news, technical] — phase 1 parallel
-          [bull, bear] — phase 2 parallel
+          [bull_open, bear_open] — phase 2 round 1 parallel
+          [bull_rebuttal, bear_rebuttal] — phase 2 round 2 parallel
+          [judge] — research manager synthesize
           [trader] — phase 3
           [risk] — phase 4
           [pm] — phase 4
@@ -687,9 +690,14 @@ class TestAgentWorkflow:
             '{"sentiment_score":0.6,"sentiment_trend":"stable","key_drivers":[],"confidence":0.7}',
             '{"event_summary":"无","impact_score":0.0,"macro_score":0.0,"key_events":[]}',
             '{"trend_direction":"bullish","support_levels":[10],"resistance_levels":[20],"patterns":[],"confidence":0.8}',
-            # Phase 2: bull + bear
+            # Phase 2 round 1: bull + bear openings
             "- 政策利好\n- 资金流入\n- 估值合理",
             "- 行业风险\n- 竞争加剧",
+            # Phase 2 round 2: rebuttals
+            "- 流动性支撑估值\n- 资金持续流入",
+            "- 估值陷阱风险\n- 资金反转风险",
+            # Research manager judgement
+            '{"final_stance":"bullish","conviction_level":0.6,"key_risks":["竞争加剧","估值偏高"],"judge_summary":"多方论据更扎实"}',
             # Phase 3: trader
             '{"side":"buy","quantity":500,"stop_loss":9.5,"take_profit":15.0,"rationale":"综合看涨","confidence":0.75}',
             # Phase 4: risk
@@ -698,15 +706,56 @@ class TestAgentWorkflow:
             '{"status":"approved","allocated_amount":30000,"rationale":"批准","conditions":[]}',
         ]
 
-    @pytest.mark.asyncio
-    async def test_happy_path_all_phases(self):
-        """Complete workflow with all agents returning valid results."""
-        gw = self._make_gateway_with_responses(self._default_responses())
+    def _make_klines(self):
         failover = MockFailover()
         failover.fetch_with_failover.return_value = [
             make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
             for _ in range(60)
         ]
+        return failover
+
+    def _routed_gateway(self, overrides=None):
+        """Content-routed gateway: maps system-prompt substrings to responses.
+
+        Robust against call-order changes and parse-failure retries (which
+        consume extra calls and would misalign index-based side_effect lists).
+        """
+        d = self._default_responses()
+        routes = {
+            "基本面分析师": d[0],
+            "市场情绪分析专家": d[1],
+            "宏观新闻分析专家": d[2],
+            "专业技术分析师": d[3],
+            "从积极面评估": d[4],
+            "从风险面寻找": d[5],
+            "请针对对方的看跌论点": d[6],
+            "请针对对方的看涨论点": d[7],
+            "研究经理": d[8],
+            "专业交易员": d[9],
+            "风险管理专家": d[10],
+            "投资组合经理": d[11],
+        }
+        if overrides:
+            routes.update(overrides)
+
+        gw = MockGateway()
+
+        async def route_chat(*args, **kwargs):
+            messages = kwargs.get("messages") or (args[0] if args else [])
+            system = messages[0].get("content", "") if messages else ""
+            for key, content in routes.items():
+                if key in system:
+                    return LLMResponse(content=content, model="x", success=True)
+            raise AssertionError(f"No route matched system prompt: {system[:60]}")
+
+        gw.chat = AsyncMock(side_effect=route_chat)
+        return gw
+
+    @pytest.mark.asyncio
+    async def test_happy_path_all_phases(self):
+        """Complete workflow with all agents returning valid results."""
+        gw = self._make_gateway_with_responses(self._default_responses())
+        failover = self._make_klines()
 
         workflow = AgentWorkflow(gw, failover)
         result = await workflow.run("000001", "平安银行")
@@ -722,22 +771,32 @@ class TestAgentWorkflow:
         assert result["news_report"] is not None
         assert result["technical_report"] is not None
 
-        # Phase 2 debate
+        # Phase 2 debate — stance decided by research manager
         debate = result["debate_conclusion"]
-        assert debate["final_stance"] == "bullish"  # 3 bull vs 2 bear
+        assert debate["final_stance"] == "bullish"
         assert len(debate["bull_arguments"]) == 3
         assert len(debate["bear_arguments"]) == 2
-        # conviction = |3-2| / max(3+2, 1) = 1/5 = 0.2
-        assert debate["conviction_level"] == pytest.approx(0.2)
-        # key_risks = bear_args[:3]
-        assert len(debate["key_risks"]) == 2
+        # conviction comes from the judge now
+        assert debate["conviction_level"] == pytest.approx(0.6)
+        # key_risks from the judge
+        assert debate["key_risks"] == ["竞争加剧", "估值偏高"]
 
-        # Phase 3
+        # Two-round debate record
+        judgement = result["research_judgement"]
+        assert judgement["rounds"] == 2
+        assert len(judgement["bull_rebuttals"]) > 0
+        assert len(judgement["bear_rebuttals"]) > 0
+
+        # Phase 3 — quantity overwritten by deterministic risk model:
+        # risk_amount = 1_000_000 * 0.02 * 0.75 = 15000; per-share risk = max(10-9.5, 10*0.01) = 0.5
         assert result["trade_proposal"]["side"] == "buy"
-        assert result["trade_proposal"]["quantity"] == 500
+        assert result["trade_proposal"]["quantity"] == 30000
+        assert result["trade_proposal"]["quantity_method"] == "risk_parity_deterministic"
 
-        # Phase 4
+        # Phase 4 — VaR/CVaR computed deterministically from flat closes → 0
         assert result["risk_assessment"]["risk_level"] == "medium"
+        assert result["risk_assessment"]["var_value"] == 0.0
+        assert result["risk_assessment"]["cvar_value"] == 0.0
         assert result["approval_decision"]["status"] == "approved"
 
         # Meta
@@ -748,17 +807,13 @@ class TestAgentWorkflow:
 
     @pytest.mark.asyncio
     async def test_tie_breaker_bearish_wins(self):
-        """BEAR has more arguments than BULL → final_stance = bearish"""
-        responses = self._default_responses()
-        responses[3] = '{"trend_direction":"bearish","support_levels":[],"resistance_levels":[],"patterns":[],"confidence":0.8}'
-        responses[4] = "- 一点利好"  # bull only 1 argument
-        responses[5] = "- 风险1\n- 风险2\n- 风险3\n- 风险4"  # bear has 4
-        gw = self._make_gateway_with_responses(responses)
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
+        """Judge unparseable → heuristic fallback: BEAR has more arguments → bearish"""
+        gw = self._routed_gateway(overrides={
+            "从积极面评估": "- 一点利好",                                # bull 1 argument
+            "从风险面寻找": "- 风险1\n- 风险2\n- 风险3\n- 风险4",       # bear 4 arguments
+            "研究经理": "研究经理暂时无法给出裁决",                      # judge fails → heuristic
+        })
+        failover = self._make_klines()
 
         workflow = AgentWorkflow(gw, failover)
         result = await workflow.run("000001", "平安银行")
@@ -767,19 +822,17 @@ class TestAgentWorkflow:
         assert debate["final_stance"] == "bearish"
         # conviction = |1-4| / max(5, 1) = 3/5 = 0.6
         assert debate["conviction_level"] == pytest.approx(0.6)
+        assert any("研究经理" in e for e in result["errors"])
 
     @pytest.mark.asyncio
     async def test_tie_breaker_equal_neutral(self):
-        """Equal number of arguments → final_stance = neutral"""
-        responses = self._default_responses()
-        responses[4] = "- arg1\n- arg2"  # bull 2
-        responses[5] = "- arg1\n- arg2"  # bear 2
-        gw = self._make_gateway_with_responses(responses)
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
+        """Judge unparseable + equal argument counts → neutral"""
+        gw = self._routed_gateway(overrides={
+            "从积极面评估": "- arg1\n- arg2",
+            "从风险面寻找": "- arg1\n- arg2",
+            "研究经理": "无法裁决",
+        })
+        failover = self._make_klines()
 
         workflow = AgentWorkflow(gw, failover)
         result = await workflow.run("000001", "平安银行")
@@ -791,15 +844,12 @@ class TestAgentWorkflow:
     @pytest.mark.asyncio
     async def test_conviction_zero_when_both_zero(self):
         """Both bull and bear return 0 arguments."""
-        responses = self._default_responses()
-        responses[4] = "no bullets at all"  # bull → fallback to 1 item [content[:200]]
-        responses[5] = "no bullets either"  # bear → fallback to 1 item [content[:200]]
-        gw = self._make_gateway_with_responses(responses)
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
+        gw = self._routed_gateway(overrides={
+            "从积极面评估": "no bullets at all",
+            "从风险面寻找": "no bullets either",
+            "研究经理": "无法裁决",
+        })
+        failover = self._make_klines()
 
         workflow = AgentWorkflow(gw, failover)
         result = await workflow.run("000001", "平安银行")
@@ -813,9 +863,7 @@ class TestAgentWorkflow:
     async def test_phase1_partial_failure(self):
         """Some analyst agents throw exceptions → errors populated, reports are None."""
         gw = self._make_gateway_with_responses(self._default_responses())
-        # Make fundamental and news throw exceptions
-        gw.chat.side_effect = gw.chat.side_effect  # keep the list
-        # We'll override by using a custom side_effect
+
         gw2 = MockGateway()
         call_count = [0]
 
@@ -830,11 +878,7 @@ class TestAgentWorkflow:
 
         gw2.chat = AsyncMock(side_effect=selective_fail)
 
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
+        failover = self._make_klines()
 
         workflow = AgentWorkflow(gw2, failover)
         result = await workflow.run("000001", "平安银行")
@@ -848,37 +892,28 @@ class TestAgentWorkflow:
 
     @pytest.mark.asyncio
     async def test_phase2_debate_exception(self):
-        """Debate agents throw exceptions → bull/bear args are empty lists."""
-        gw = self._make_gateway_with_responses(self._default_responses())
+        """Bull debate agent throws → bull args empty; judge unparseable →
+        heuristic picks bearish (0 vs 2)."""
+        gw = self._routed_gateway(overrides={"研究经理": "无法裁决"})
 
-        # After 4 phase-1 calls, the next 2 calls are debate.
-        # We make bull (call 4) fail
-        call_count = [0]
+        inner_route = gw.chat.side_effect
 
         async def fail_bull(*args, **kwargs):
-            idx = call_count[0]
-            call_count[0] += 1
-            if idx == 4:  # bull debate throws
+            messages = kwargs.get("messages") or (args[0] if args else [])
+            if messages and "从积极面评估" in messages[0].get("content", ""):
                 raise RuntimeError("Debate timeout")
-            return LLMResponse(content=self._default_responses()[idx], model="x", success=True)
+            return await inner_route(*args, **kwargs)
 
-        # Need fresh gateway with proper side_effect
-        gw2 = MockGateway()
-        gw2.chat = AsyncMock(side_effect=fail_bull)
+        gw.chat = AsyncMock(side_effect=fail_bull)
+        failover = self._make_klines()
 
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
-
-        workflow = AgentWorkflow(gw2, failover)
+        workflow = AgentWorkflow(gw, failover)
         result = await workflow.run("000001", "平安银行")
 
         debate = result["debate_conclusion"]
         assert debate["bull_arguments"] == []  # failed → empty
         assert len(debate["bear_arguments"]) == 2  # bear succeeded
-        assert debate["final_stance"] == "bearish"  # bear 2 > bull 0
+        assert debate["final_stance"] == "bearish"  # heuristic: bear 2 > bull 0
 
     @pytest.mark.asyncio
     async def test_phase1_all_fail_still_completes(self):
@@ -898,11 +933,7 @@ class TestAgentWorkflow:
         gw = MockGateway()
         gw.chat = AsyncMock(side_effect=selective_fail)
 
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
+        failover = self._make_klines()
 
         workflow = AgentWorkflow(gw, failover)
         result = await workflow.run("000001", "平安银行")
@@ -922,11 +953,7 @@ class TestAgentWorkflow:
     async def test_empty_name_defaults_to_empty_string(self):
         """name="" is valid → workflow still runs."""
         gw = self._make_gateway_with_responses(self._default_responses())
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
+        failover = self._make_klines()
         workflow = AgentWorkflow(gw, failover)
         result = await workflow.run("000001", "")
         assert result["name"] == ""
@@ -936,26 +963,80 @@ class TestAgentWorkflow:
     async def test_news_items_passed_to_news_analyst(self):
         """Verify that news_items parameter reaches NewsAnalyst.analyze()"""
         gw = self._make_gateway_with_responses(self._default_responses())
-        failover = MockFailover()
-        failover.fetch_with_failover.return_value = [
-            make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
-            for _ in range(60)
-        ]
+        failover = self._make_klines()
         workflow = AgentWorkflow(gw, failover)
         news_items = [{"source": "测试", "title": "标题"}]
         result = await workflow.run("000001", "平安银行", news_items=news_items)
         assert result["news_report"] is not None
 
     @pytest.mark.asyncio
-    async def test_session_and_correlation_ids_are_unique(self):
-        """Each run() call generates new unique UUIDs."""
-        gw1 = self._make_gateway_with_responses(self._default_responses())
-        gw2 = self._make_gateway_with_responses(self._default_responses())
+    async def test_sentiment_receives_headlines(self):
+        """BUG-2 regression: sentiment analyst must receive real headlines."""
+        gw = self._make_gateway_with_responses(self._default_responses())
+        captured_prompts = []
+
+        async def capturing_chat(*args, **kwargs):
+            messages = kwargs.get("messages") or (args[0] if args else [])
+            for m in messages:
+                if m.get("role") == "user":
+                    captured_prompts.append(m.get("content", ""))
+            return await AsyncMock(return_value=LLMResponse(
+                content='{"sentiment_score":0.5,"sentiment_trend":"up","key_drivers":[],"confidence":0.8}',
+                model="x", success=True))()
+
+        gw.chat = AsyncMock(side_effect=capturing_chat)
         failover = MockFailover()
         failover.fetch_with_failover.return_value = [
             make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
             for _ in range(60)
         ]
+        # Also serve a NEWS fetch returning dict items
+        news_payload = [{"source": "财联社", "title": "重大利好政策出台"}]
+
+        async def route_fetch(data_type, symbol, **kwargs):
+            from app.adapters import DataType as DT
+            if data_type == DT.KLINE:
+                return [make_kline(close=10.0, high=11.0, low=9.0, volume=1000, open_=10.0)
+                        for _ in range(60)]
+            if data_type == DT.NEWS:
+                return news_payload
+            return []
+
+        failover.fetch_with_failover = AsyncMock(side_effect=route_fetch)
+
+        workflow = AgentWorkflow(gw, failover)
+        await workflow.run("000001", "平安银行")
+
+        sentiment_prompt = next((p for p in captured_prompts if "情绪分析" in p), "")
+        assert "重大利好政策出台" in sentiment_prompt
+
+    @pytest.mark.asyncio
+    async def test_run_stream_yields_phases_then_result(self):
+        """run_stream emits progress events then a final result event."""
+        gw = self._make_gateway_with_responses(self._default_responses())
+        failover = self._make_klines()
+        workflow = AgentWorkflow(gw, failover)
+
+        events = []
+        async for kind, payload in workflow.run_stream("000001", "平安银行"):
+            events.append((kind, payload))
+
+        kinds = [k for k, _ in events]
+        assert kinds[0] == "phase"
+        assert kinds[-1] == "result"
+        assert kinds.count("result") == 1
+        phases = [p for k, p in events if k == "phase"]
+        assert [p["phase"] for p in phases] == [0, 1, 1, 2, 2, 3, 3, 4, 4, 5]
+        result = events[-1][1]
+        assert result["status"] == "completed"
+        assert result["trade_proposal"]["quantity_method"] == "risk_parity_deterministic"
+
+    @pytest.mark.asyncio
+    async def test_session_and_correlation_ids_are_unique(self):
+        """Each run() call generates new unique UUIDs."""
+        gw1 = self._make_gateway_with_responses(self._default_responses())
+        gw2 = self._make_gateway_with_responses(self._default_responses())
+        failover = self._make_klines()
 
         w1 = AgentWorkflow(gw1, failover)
         w2 = AgentWorkflow(gw2, failover)
@@ -982,3 +1063,146 @@ class TestAgentIds:
         for aid in ids:
             assert aid.startswith("AGENT-")
             assert len(aid) > 7
+
+
+# ===================================================================
+# 14. FallbackAnalyzer — indicator argument-order regression (BUG-1)
+# ===================================================================
+class TestFallbackAnalyzerIndicators:
+
+    def _make_workflow(self, klines):
+        failover = MockFailover()
+
+        async def route_fetch(data_type, symbol, **kwargs):
+            from app.adapters import DataType as DT
+            if data_type == DT.KLINE:
+                return klines
+            if data_type == DT.NEWS:
+                return []
+            return []
+
+        failover.fetch_with_failover = AsyncMock(side_effect=route_fetch)
+        return AgentWorkflow(MockGateway(), failover)
+
+    @pytest.mark.asyncio
+    async def test_indicators_computed_from_correctly_ordered_arrays(self):
+        """BUG-1: closes were previously passed as `high` → every indicator
+        was computed on the wrong series. ma5 must equal MA5(closes)."""
+        pytest.importorskip("talib")
+        from app.schemas import ApprovalDecisionPayload, TradeProposalPayload
+        from app.adapters import KlineData
+
+        n = 60
+        klines = [
+            KlineData(symbol="000001", date=f"2024-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}",
+                      open=float(i), high=float(i) + 10.0,
+                      low=float(i), close=float(i), volume=1000)
+            for i in range(n)
+        ]
+        workflow = self._make_workflow(klines)
+
+        approval = ApprovalDecisionPayload(symbol="000001", status="approved",
+                                           allocated_amount=0, rationale="", conditions=[])
+        trade = TradeProposalPayload(symbol="000001", name="测试股", side="hold", quantity=0,
+                                     stop_loss=0, take_profit=0, rationale="", confidence=0.5)
+
+        from app.schemas import DebateConclusionPayload
+        debate_payload = DebateConclusionPayload(
+            symbol="000001", name="x", bull_arguments=[], bear_arguments=[],
+            final_stance="neutral", conviction_level=0.0, key_risks=[])
+
+        report = await workflow.fallback_analyzer.generate(
+            "000001", "测试股", approval, trade, debate_payload,
+        )
+
+        indicators = (report.get("trend") or {}).get("indicators") or {}
+        # closes are 0..59 → MA5 of last five = mean(55..59) = 57.0
+        expected_ma5 = sum(range(55, 60)) / 5
+        assert indicators.get("ma5") == pytest.approx(expected_ma5, abs=0.01)
+        # If the bug were present (highs passed as first arg), ma5 would be 67.0
+        assert indicators.get("ma5") != pytest.approx(expected_ma5 + 10, abs=0.01)
+
+
+# ===================================================================
+# 15. risk_metrics — deterministic VaR/CVaR & position sizing
+# ===================================================================
+class TestRiskMetrics:
+
+    def test_var_cvar_known_sample(self):
+        from app.risk_metrics import historical_var_cvar
+        # 30 returns: 27 flat days + three -10% days (tail > 5% so the
+        # 95% quantile lands inside the loss region)
+        closes = [100.0]
+        for r in [0.0] * 27 + [-0.10] * 3:
+            closes.append(closes[-1] * (1 + r))
+        result = historical_var_cvar(np.array(closes), position_value=100_000,
+                                     confidence_level=0.95, horizon_days=1)
+        assert not result["insufficient_history"]
+        assert result["sample_size"] >= 30
+        # The 5% quantile return is -10% → VaR = 10% of position
+        assert result["var_value"] == pytest.approx(10_000, rel=0.05)
+        assert result["cvar_value"] >= result["var_value"]
+
+    def test_insufficient_history_flag(self):
+        from app.risk_metrics import historical_var_cvar
+        result = historical_var_cvar(np.array([100.0] * 10), position_value=50_000)
+        assert result["insufficient_history"] is True
+        assert result["var_value"] == 0.0
+        assert result["cvar_value"] == 0.0
+
+    def test_higher_confidence_never_lower_var(self):
+        from app.risk_metrics import historical_var_cvar
+        rng = np.random.default_rng(42)
+        closes = 100 * np.cumprod(1 + rng.normal(0, 0.02, 120))
+        v95 = historical_var_cvar(closes, 1_000_000, confidence_level=0.95)
+        v99 = historical_var_cvar(closes, 1_000_000, confidence_level=0.99)
+        assert v99["var_value"] >= v95["var_value"]
+
+    def test_position_size_math(self):
+        from app.risk_metrics import position_size
+        # conf .75, price 10, stop 9.5 → 15000 / 0.5 = 30000 shares
+        assert position_size(0.75, 10.0, 9.5) == 30000
+
+    def test_position_size_guards(self):
+        from app.risk_metrics import position_size
+        assert position_size(0.75, 0.0, 9.5) == 0
+        assert position_size(0.0, 10.0, 20.0) > 0
+        assert position_size(-5.0, 10.0, 9.5) > 0
+        # tighter stop → smaller per-share risk → larger size
+        assert position_size(0.9, 10.0, 9.999) > position_size(0.9, 10.0, 9.0)
+
+
+# ===================================================================
+# 16. ResearchManager — judge synthesis with fallback
+# ===================================================================
+class TestResearchManager:
+
+    @pytest.mark.asyncio
+    async def test_judge_success_synthesizes_stance(self):
+        gw = MockGateway(response=LLMResponse(
+            content='{"final_stance":"bullish","conviction_level":0.7,"key_risks":["r1"],"judge_summary":"多方胜出"}',
+            model="x", success=True))
+        rm = __import__("app.agents", fromlist=["ResearchManager"]).ResearchManager(gw)
+        payload = await rm.synthesize("000001", "X", ["b1"], ["s1"], ["br1"], ["sr1"])
+        assert payload is not None
+        assert payload.final_stance == "bullish"
+        assert payload.conviction_level == pytest.approx(0.7)
+        assert payload.key_risks == ["r1"]
+        assert rm.last_parse_ok is True
+
+    @pytest.mark.asyncio
+    async def test_judge_failure_returns_none_for_heuristic_fallback(self):
+        gw = MockGateway()
+        gw.set_response("完全无法解析的输出")
+        rm = __import__("app.agents", fromlist=["ResearchManager"]).ResearchManager(gw)
+        payload = await rm.synthesize("000001", "X", ["b1"], ["s1"], [], [])
+        assert payload is None
+        assert rm.last_parse_ok is False
+
+    @pytest.mark.asyncio
+    async def test_judge_invalid_stance_rejected(self):
+        gw = MockGateway(response=LLMResponse(
+            content='{"final_stance":"sideways_up","conviction_level":0.5,"key_risks":[]}',
+            model="x", success=True))
+        rm = __import__("app.agents", fromlist=["ResearchManager"]).ResearchManager(gw)
+        assert await rm.synthesize("000001", "X", [], [], [], []) is None
