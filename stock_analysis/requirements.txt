@@ -43,7 +43,7 @@ TA-Lib>=0.4.28
 # --- Financial Data Sources ---
 akshare>=1.14
 tushare>=1.4
-yfinance>=0.2.40
+# yfinance 已移除：其 cookie/crumb 依赖 mini_racer(V8)，卡死会持 GIL 冻结事件循环；Yahoo 改走纯 HTTP
 # efinance>=0.5  # optional, uncomment if needed
 
 # --- NLP & Text ---

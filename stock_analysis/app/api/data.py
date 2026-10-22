@@ -384,6 +384,7 @@ async def get_fundamental(
 
 _HEALTH_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 _HEALTH_TTL = 120.0
+_HEALTH_PROBING: Dict[str, bool] = {"running": False}
 
 
 async def _probe_tencent() -> bool:
@@ -398,29 +399,43 @@ async def _probe_tencent() -> bool:
         return False
 
 
+async def _run_health_probe() -> None:
+    """Probe every source in the background; never block the request path."""
+    if _HEALTH_PROBING["running"]:
+        return
+    _HEALTH_PROBING["running"] = True
+    try:
+        manager = get_failover()
+        try:
+            data = await asyncio.wait_for(manager.health_check_all(), timeout=12.0)
+        except Exception as exc:
+            logger.warning(f"data source health check failed: {exc}")
+            data = {}
+        try:
+            data = {**data, "腾讯财经": await _probe_tencent()}
+        except Exception:
+            pass
+        if data:
+            _HEALTH_CACHE.update({"ts": time.time(), "data": data})
+    finally:
+        _HEALTH_PROBING["running"] = False
+
+
 @router.get("/health")
 async def data_source_health():
     """Check health of all registered data sources.
 
-    The live probe can take tens of seconds (each source is contacted
-    separately), so the result is cached briefly — the header polls it on
-    every dashboard refresh.
+    Probing happens in the background and the result is cached for 120s, so a
+    slow or hanging source can never block a request (the UI polls this on
+    every dashboard refresh).
     """
     now = time.time()
-    if _HEALTH_CACHE["data"] is not None and now - _HEALTH_CACHE["ts"] < _HEALTH_TTL:
-        return _HEALTH_CACHE["data"]
-    manager = get_failover()
-    try:
-        data = await asyncio.wait_for(manager.health_check_all(), timeout=12.0)
-    except Exception as exc:
-        logger.warning(f"data source health check failed: {exc}")
-        data = _HEALTH_CACHE["data"] or {}
-    try:
-        data = {**data, "腾讯财经": await _probe_tencent()}
-    except Exception:
-        pass
-    _HEALTH_CACHE.update({"ts": now, "data": data})
-    return data
+    cached = _HEALTH_CACHE["data"]
+    if cached is not None and now - _HEALTH_CACHE["ts"] < _HEALTH_TTL:
+        return cached
+    # 触发后台探测，本次请求立即返回上一次结果
+    asyncio.create_task(_run_health_probe())
+    return cached or {"status": "probing"}
 
 
 # ============================================================================

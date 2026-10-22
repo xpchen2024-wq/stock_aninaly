@@ -445,29 +445,102 @@ class TushareAdapter(BaseAdapter):
             raise
 
 
+# -- Yahoo Finance (pure HTTP, no yfinance) -----------------------------------
+# 说明：yfinance 获取 cookie/crumb 依赖 mini_racer(V8) 原生调用，一旦在 V8 里
+# 死循环会持有 GIL，从而冻结整个 asyncio 事件循环（表现为全站接口无响应）。
+# 这里改为直接调用 Yahoo 的公开 HTTP 接口，不引入任何 JS 引擎。
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+YAHOO_CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb"
+YAHOO_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+YAHOO_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Accept": "application/json",
+}
+
+
+def _yahoo_symbol(symbol: str) -> str:
+    """'600519' -> '600519.SS' / '000001' -> '000001.SZ'；其他原样返回。"""
+    sym = str(symbol or "").strip()
+    if sym.isdigit() and len(sym) == 6:
+        return f"{sym}.SS" if sym.startswith("6") else f"{sym}.SZ"
+    return sym
+
+
+def _yahoo_ts(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(value)[:10]).timestamp())
+    except (ValueError, TypeError):
+        return None
+
+
+def _yahoo_rows(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """把 chart 接口的列式数组转成行式 K 线。"""
+    try:
+        result = (payload.get("chart") or {}).get("result") or []
+        if not result:
+            return []
+        r = result[0]
+        ts = r.get("timestamp") or []
+        quote = ((r.get("indicators") or {}).get("quote") or [{}])[0]
+        o, h, l, c, v = (quote.get(k) or [] for k in ("open", "high", "low", "close", "volume"))
+        rows = []
+        for i, t in enumerate(ts):
+            def _g(seq, idx):
+                try:
+                    val = seq[idx]
+                    return float(val) if val is not None else 0.0
+                except (IndexError, TypeError, ValueError):
+                    return 0.0
+            rows.append({
+                "date": datetime.utcfromtimestamp(t).strftime("%Y-%m-%d"),
+                "open": _g(o, i), "high": _g(h, i), "low": _g(l, i),
+                "close": _g(c, i), "volume": _g(v, i),
+            })
+        return rows
+    except Exception as exc:
+        logger.debug(f"yahoo rows parse failed: {exc}")
+        return []
+
+
 class YahooFinanceAdapter(BaseAdapter):
-    """Yahoo Finance adapter - good for international stocks."""
+    """Yahoo Finance adapter - good for international stocks (pure HTTP, no JS engine)."""
 
     async def fetch_kline(self, symbol: str, frequency: str = "D",
                           start_date: Optional[str] = None,
                           end_date: Optional[str] = None) -> List[KlineData]:
         try:
-            import yfinance as yf
+            import httpx
 
-            yf_symbol = symbol
-            if symbol.isdigit() and len(symbol) == 6:
-                if symbol.startswith("6"):
-                    yf_symbol = f"{symbol}.SS"
-                else:
-                    yf_symbol = f"{symbol}.SZ"
-
-            loop = asyncio.get_event_loop()
-            ticker = await loop.run_in_executor(None, lambda: yf.Ticker(yf_symbol))
+            yf_symbol = _yahoo_symbol(symbol)
 
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+            p1, p2 = _yahoo_ts(start_date), _yahoo_ts(end_date)
+            interval = {"D": "1d", "W": "1wk", "M": "1mo"}.get(frequency, "1d")
+            params = {"interval": interval}
+            if p1 and p2:
+                params.update({"period1": p1, "period2": p2 + 86400})
+
+            async with httpx.AsyncClient(timeout=10.0, headers=YAHOO_HEADERS) as client:
+                resp = await client.get(YAHOO_CHART_URL.format(symbol=yf_symbol), params=params)
+                resp.raise_for_status()
+                payload = resp.json()
+            rows = _yahoo_rows(payload)
+            if not rows:
+                return []
+            return [
+                KlineData(symbol=symbol, date=r["date"], open=r["open"], high=r["high"],
+                          low=r["low"], close=r["close"], volume=r["volume"],
+                          amount=r["close"] * r["volume"])
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning(f"Yahoo Finance fetch_kline failed for {symbol}: {e}")
+            raise
 
             df = await loop.run_in_executor(
                 None,
@@ -494,55 +567,107 @@ class YahooFinanceAdapter(BaseAdapter):
 
     async def fetch_realtime_quote(self, symbol: str) -> Optional[RealtimeQuote]:
         try:
-            import yfinance as yf
-            yf_symbol = symbol
-            if symbol.isdigit() and len(symbol) == 6:
-                if symbol.startswith("6"):
-                    yf_symbol = f"{symbol}.SS"
-                else:
-                    yf_symbol = f"{symbol}.SZ"
+            import httpx
 
-            loop = asyncio.get_event_loop()
-            ticker = await loop.run_in_executor(None, lambda: yf.Ticker(yf_symbol))
-            info = await loop.run_in_executor(None, lambda: ticker.info)
-
+            yf_symbol = _yahoo_symbol(symbol)
+            async with httpx.AsyncClient(timeout=10.0, headers=YAHOO_HEADERS) as client:
+                resp = await client.get(
+                    YAHOO_CHART_URL.format(symbol=yf_symbol),
+                    params={"interval": "1d", "range": "5d"},
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            results = (payload.get("chart") or {}).get("result") or []
+            if not results:
+                return None
+            meta = results[0].get("meta") or {}
+            price = float(meta.get("regularMarketPrice") or 0)
+            pre_close = float(meta.get("chartPreviousClose") or meta.get("previousClose") or 0)
+            if not price:
+                rows = _yahoo_rows(payload)
+                price = rows[-1]["close"] if rows else 0.0
+                pre_close = rows[-2]["close"] if len(rows) > 1 else pre_close
+            change_pct = ((price / pre_close) - 1) * 100 if pre_close else 0.0
             return RealtimeQuote(
                 symbol=symbol,
-                name=info.get("longName", info.get("shortName", "")),
-                price=float(info.get("currentPrice", info.get("regularMarketPrice", 0))),
-                change_pct=float(info.get("regularMarketChangePercent", 0)),
-                volume=int(info.get("volume", 0)),
-                high=float(info.get("dayHigh", 0)),
-                low=float(info.get("dayLow", 0)),
-                open=float(info.get("regularMarketOpen", 0)),
-                pre_close=float(info.get("previousClose", 0)),
+                name=meta.get("shortName") or meta.get("longName") or symbol,
+                price=price,
+                change_pct=change_pct,
+                volume=int(meta.get("regularMarketVolume") or 0),
+                high=float(meta.get("regularMarketDayHigh") or 0),
+                low=float(meta.get("regularMarketDayLow") or 0),
+                open=float(meta.get("regularMarketOpen") or 0),
+                pre_close=pre_close,
             )
         except Exception as e:
             logger.warning(f"Yahoo Finance fetch_realtime_quote failed for {symbol}: {e}")
             raise
 
+    async def health_check(self) -> bool:
+        """Liveness probe without any JS engine (yfinance would risk a GIL freeze)."""
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=8.0, headers=YAHOO_HEADERS) as client:
+                resp = await client.get(
+                    YAHOO_CHART_URL.format(symbol="AAPL"),
+                    params={"interval": "1d", "range": "1d"},
+                )
+                ok = resp.status_code == 200 and bool(
+                    (resp.json().get("chart") or {}).get("result")
+                )
+            self._healthy = bool(ok)
+            return self._healthy
+        except Exception as e:
+            self._healthy = False
+            self._last_error = str(e)
+            return False
+
     async def fetch_fundamental(self, symbol: str) -> Optional[FundamentalData]:
         try:
-            import yfinance as yf
-            yf_symbol = symbol
-            if symbol.isdigit() and len(symbol) == 6:
-                if symbol.startswith("6"):
-                    yf_symbol = f"{symbol}.SS"
-                else:
-                    yf_symbol = f"{symbol}.SZ"
+            import httpx
 
-            loop = asyncio.get_event_loop()
-            ticker = await loop.run_in_executor(None, lambda: yf.Ticker(yf_symbol))
-            info = await loop.run_in_executor(None, lambda: ticker.info)
+            yf_symbol = _yahoo_symbol(symbol)
+            async with httpx.AsyncClient(timeout=10.0, headers=YAHOO_HEADERS) as client:
+                # quoteSummary 需要 cookie + crumb，两者都可用纯 HTTP 获取（无 JS）
+                try:
+                    await client.get("https://fc.yahoo.com", timeout=6.0)
+                    crumb_resp = await client.get(YAHOO_CRUMB_URL, timeout=6.0)
+                    crumb = crumb_resp.text.strip() if crumb_resp.status_code == 200 else ""
+                except Exception:
+                    crumb = ""
+                params = {"modules": "summaryDetail,defaultKeyStatistics,price"}
+                if crumb and len(crumb) < 40:
+                    params["crumb"] = crumb
+                resp = await client.get(
+                    YAHOO_SUMMARY_URL.format(symbol=yf_symbol), params=params
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            result = ((payload.get("quoteSummary") or {}).get("result") or [{}])[0]
+            if not result:
+                return None
+            detail = result.get("summaryDetail") or {}
+            stats = result.get("defaultKeyStatistics") or {}
+            price = result.get("price") or {}
+
+            def _num(container, key, default=0.0):
+                val = container.get(key)
+                if isinstance(val, dict):
+                    val = val.get("raw")
+                try:
+                    return float(val) if val is not None else default
+                except (TypeError, ValueError):
+                    return default
 
             return FundamentalData(
                 symbol=symbol,
-                name=info.get("longName", ""),
-                pe_ratio=float(info.get("trailingPE", 0) or 0),
-                pb_ratio=float(info.get("priceToBook", 0) or 0),
-                market_cap=float(info.get("marketCap", 0) or 0) / 1e8,
-                industry=info.get("industry", ""),
-                roe=float(info.get("returnOnEquity", 0) or 0) * 100,
+                name=price.get("longName") or price.get("shortName") or symbol,
+                pe_ratio=_num(detail, "trailingPE"),
+                pb_ratio=_num(stats, "priceToBook"),
+                market_cap=_num(price, "marketCap") / 1e8,
+                industry=(stats.get("sector") or ""),
+                roe=_num(stats, "returnOnEquity") * 100,
             )
         except Exception as e:
             logger.warning(f"Yahoo Finance fetch_fundamental failed for {symbol}: {e}")
