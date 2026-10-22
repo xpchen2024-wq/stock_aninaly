@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # --- App ---
     APP_NAME: str = "AIStockAnalysis"
-    APP_VERSION: str = "1.4.0"
+    APP_VERSION: str = "1.5.0"
     APP_ENV: str = "development"
     APP_DEBUG: bool = True
 
