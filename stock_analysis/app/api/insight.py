@@ -18,7 +18,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
 from app.adapters import create_default_failover_manager, FailoverManager, DataType
-from app.api.data import _fetch_quote_tencent
+from app.api.data import _fetch_quote_tencent, resolve_stock_symbol
 from app.config import get_settings
 from app.indicators import compute_all_indicators
 from app.insight import (
@@ -51,24 +51,27 @@ def get_failover() -> FailoverManager:
     return _failover
 
 
-def _code(symbol: str) -> str:
+async def _code(symbol: str) -> str:
+    """支持 6 位代码、带后缀代码与股票中文名。"""
     import re
-    match = re.search(r"(\d{6})", symbol)
+    resolved = await resolve_stock_symbol(symbol)
+    match = re.search(r"(\d{6})", resolved)
     if not match:
-        raise HTTPException(status_code=422, detail=f"无法解析股票代码: {symbol}")
+        raise HTTPException(status_code=404, detail=f"未找到股票: {symbol}")
     return match.group(1)
 
 
-async def _resolve_price(symbol: str) -> Dict[str, Any]:
+async def _resolve_price(symbol: str, lookback: int = 60) -> Dict[str, Any]:
     quote = await _fetch_quote_tencent(symbol)
     if quote and quote.get("price"):
         return {"price": float(quote["price"]), "name": quote.get("name", ""),
                 "change_pct": float(quote.get("change_pct") or 0.0), "source": "tencent"}
     try:
         from datetime import datetime, timedelta
-        start_date = (datetime.now() - timedelta(days=int(lookback * 1.6) + 30)).strftime("%Y%m%d")
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=max(60, int(lookback * 1.6) + 30))).strftime("%Y%m%d")
         klines = await get_failover().fetch_with_failover(
-            DataType.KLINE, symbol, start_date=start_date,
+            DataType.KLINE, symbol, frequency="D", start_date=start_date, end_date=end_date,
         )
         if klines:
             return {"price": float(klines[-1].close), "name": "", "change_pct": 0.0,
@@ -79,12 +82,12 @@ async def _resolve_price(symbol: str) -> Dict[str, Any]:
 
 
 @router.get("/valuation")
-async def get_valuation(symbol: str = Query(..., description="股票代码，如 300750.SZ")):
-    code = _code(symbol)
-    price_info = await _resolve_price(symbol)
+async def get_valuation(symbol: str = Query(..., description="股票代码或名称，如 300750.SZ / 宁德时代")):
+    code = await _code(symbol)
+    price_info = await _resolve_price(code)
     result = await analyze_valuation(code, price_info["price"])
     return {
-        "symbol": symbol, "name": price_info["name"],
+        "symbol": code, "name": price_info["name"],
         "change_pct": price_info["change_pct"],
         "price_source": price_info["source"],
         **result.to_dict(),
@@ -93,7 +96,7 @@ async def get_valuation(symbol: str = Query(..., description="股票代码，如
 
 @router.get("/quality")
 async def get_quality(symbol: str = Query(...)):
-    code = _code(symbol)
+    code = await _code(symbol)
     rows = await fetch_financial_abstract(code)
     if not rows:
         raise HTTPException(status_code=502, detail="财务数据源暂不可用，请稍后重试")
@@ -103,7 +106,7 @@ async def get_quality(symbol: str = Query(...)):
     quality = compute_quality_score(metrics)
     growth = compute_growth_score(metrics)
     return {
-        "symbol": symbol,
+        "symbol": code,
         "latest_period": metrics.get("latest_period"),
         "metrics": {k: v for k, v in metrics.items() if k != "history"},
         "history": metrics.get("history", []),
@@ -114,8 +117,8 @@ async def get_quality(symbol: str = Query(...)):
 
 @router.get("/scorecard")
 async def get_scorecard(symbol: str = Query(...), lookback: int = Query(250, ge=60, le=500)):
-    code = _code(symbol)
-    price_info = await _resolve_price(symbol)
+    code = await _code(symbol)
+    price_info = await _resolve_price(code, lookback)
     price = price_info["price"]
 
     valuation, rows = await asyncio.gather(
@@ -134,7 +137,8 @@ async def get_scorecard(symbol: str = Query(...), lookback: int = Query(250, ge=
         from datetime import datetime, timedelta
         start_date = (datetime.now() - timedelta(days=int(lookback * 1.6) + 30)).strftime("%Y%m%d")
         klines = await get_failover().fetch_with_failover(
-            DataType.KLINE, symbol, start_date=start_date,
+            DataType.KLINE, code, frequency="D", start_date=start_date,
+            end_date=datetime.now().strftime("%Y%m%d"),
         )
         if klines:
             window = klines[-lookback:]
@@ -173,7 +177,7 @@ async def get_scorecard(symbol: str = Query(...), lookback: int = Query(250, ge=
     narrative = build_narrative(valuation, metrics or {}, quality, growth, momentum, risk, composite, plan)
 
     return {
-        "symbol": symbol,
+        "symbol": code,
         "name": price_info["name"],
         "price": round(price, 2),
         "change_pct": price_info["change_pct"],

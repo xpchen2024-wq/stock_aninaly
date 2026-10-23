@@ -1739,8 +1739,11 @@
           <div class="text-muted">估值分位 + 财务质量 + 成长 + 动量 + 风险，五维打分并给出可执行操作计划</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <input type="text" id="insightSymbol" placeholder="输入股票代码，如 300750.SZ" autocomplete="off"
-                 style="width:220px;height:36px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:0 12px;color:var(--text-primary);">
+          <div class="stock-suggest-wrap" style="width:240px;">
+            <input type="text" id="insightSymbol" placeholder="输入股票代码或名称，如 300750 / 岭南控股" autocomplete="off"
+                   style="width:100%;height:36px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:0 12px;color:var(--text-primary);">
+            <div class="stock-suggest" id="insightStockSuggest"></div>
+          </div>
           <button class="btn btn-primary" id="btnRunInsight">🩺 开始体检</button>
         </div>
       </div>
@@ -2965,6 +2968,13 @@
   attachStockSuggest('trendSymbolInput', 'trendStockSuggest', {
     format: s => `${s.symbol}.${s.market || ''} ${s.name}`,
     onSelect: () => { loadKline(true); },
+  });
+
+  // 投资体检：代码 / 名称联想
+  attachStockSuggest('insightSymbol', 'insightStockSuggest', {
+    format: s => `${s.symbol}.${s.market || ''} ${s.name}`,
+    onEnter: (val) => { if (val) runInsight(); },
+    onSelect: () => runInsight(),
   });
 
   async function addStockToWatchlist(symbol, name) {
@@ -5195,8 +5205,8 @@
     ind.innerHTML = tags.join('');
   }
 
-  async function resolveTrendSymbolInput() {
-    const input = document.getElementById('trendSymbolInput');
+  async function resolveStockInput(inputId) {
+    const input = document.getElementById(inputId);
     const raw = (input?.value || '').trim();
     if (!raw) return '';
     const m = raw.match(/(\d{6}(?:\.(?:SZ|SH|BJ|ss|sz|sh|bj))?)/);
@@ -5237,7 +5247,7 @@
     }
 
     // 名称输入先解析成 6 位代码，避免把中文名直接发给行情源
-    const symbol = await resolveTrendSymbolInput();
+    const symbol = await resolveStockInput('trendSymbolInput');
     if (!symbol) {
       document.getElementById('klineTitle').textContent = `📈 ${raw} 请从下拉建议中选择股票`;
       return;
@@ -5744,7 +5754,7 @@
   async function runForecast() {
     const raw = (document.getElementById('trendSymbolInput')?.value || '').trim();
     if (!raw) { toast('请输入股票代码或名称', 'warn'); return; }
-    const symbol = await resolveTrendSymbolInput();
+    const symbol = await resolveStockInput('trendSymbolInput');
     if (!symbol) { toast('未找到匹配的股票，请从下拉建议中选择', 'warn'); return; }
     const horizon = parseInt(document.getElementById('trendHorizonSelect')?.value || '10', 10);
     const btn = document.getElementById('btnRunForecast');
@@ -5829,7 +5839,7 @@
   async function runExplain(btn) {
     const raw = (document.getElementById('trendSymbolInput')?.value || '').trim();
     if (!raw) { toast('请输入股票代码或名称', 'warn'); return; }
-    const symbol = await resolveTrendSymbolInput();
+    const symbol = await resolveStockInput('trendSymbolInput');
     if (!symbol) { toast('未找到匹配的股票，请从下拉建议中选择', 'warn'); return; }
     const horizon = parseInt(document.getElementById('trendHorizonSelect')?.value || '10', 10);
     const area = document.getElementById('trend-result');
@@ -8106,9 +8116,6 @@
     if (btn && !btn.dataset.wired) {
       btn.dataset.wired = '1';
       btn.addEventListener('click', runInsight);
-      document.getElementById('insightSymbol')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') runInsight();
-      });
     }
     setTimeout(() => {
       Object.values(insightCharts).forEach(c => c && !c.isDisposed() && c.resize());
@@ -8147,8 +8154,9 @@
 
   async function runInsight() {
     const raw = document.getElementById('insightSymbol')?.value?.trim();
-    if (!raw) { toast('请输入股票代码', 'warn'); return; }
-    const symbol = raw.split(/\s+/)[0];
+    if (!raw) { toast('请输入股票代码或名称', 'warn'); return; }
+    const symbol = await resolveStockInput('insightSymbol');
+    if (!symbol) { toast('未找到匹配的股票，请从下拉建议中选择', 'warn'); return; }
     const btn = document.getElementById('btnRunInsight');
     btn.disabled = true; btn.textContent = '⏳ 体检中...';
     try {
