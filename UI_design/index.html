@@ -5194,19 +5194,30 @@
     ind.innerHTML = tags.join('');
   }
 
+  async function resolveTrendSymbolInput() {
+    const input = document.getElementById('trendSymbolInput');
+    const raw = (input?.value || '').trim();
+    if (!raw) return '';
+    const m = raw.match(/(\d{6}(?:\.(?:SZ|SH|BJ|ss|sz|sh|bj))?)/);
+    if (m) return m[1];
+    const hits = await API.get('/api/v1/data/search', { q: raw, limit: 1 }, 10000).catch(() => []);
+    const hit = Array.isArray(hits) ? hits[0] : null;
+    if (!hit) return '';
+    const canonical = `${hit.symbol}.${hit.market || ''}`;
+    if (input) input.value = `${canonical} ${hit.name}`;
+    return canonical;
+  }
+
   async function loadKline(force = false) {
     const symbolInput = document.getElementById('trendSymbolInput');
     const freqSelect = document.getElementById('trendFrequencySelect');
     if (!symbolInput) return;
     const raw = symbolInput.value.trim();
-    // Extract symbol code (e.g. "300750.SZ 宁德时代" -> "300750.SZ" or first 6-digit)
-    const m = raw.match(/(\d{6}(?:\.(?:SZ|SH|ss|sz|sh))?)/);
-    const symbol = m ? m[1] : raw.split(/\s+/)[0];
     const frequency = freqSelect ? freqSelect.value : 'D';
     const days = frequency === 'D' ? 260 : frequency === 'W' ? 730 : frequency === 'M' ? 1825 : 7;
 
     // 未输入标的：展示空状态，不发起请求
-    if (!symbol) {
+    if (!raw) {
       window._klineLoadingKey = null;
       const titleEl = document.getElementById('klineTitle');
       if (titleEl) titleEl.textContent = '📈 K线图';
@@ -5219,6 +5230,13 @@
       }
       const indEl = document.getElementById('klineIndicators');
       if (indEl) indEl.innerHTML = '';
+      return;
+    }
+
+    // 名称输入先解析成 6 位代码，避免把中文名直接发给行情源
+    const symbol = await resolveTrendSymbolInput();
+    if (!symbol) {
+      document.getElementById('klineTitle').textContent = `📈 ${raw} 未找到匹配的股票`;
       return;
     }
 
@@ -5721,8 +5739,10 @@
   }
 
   async function runForecast() {
-    const symbol = trendSymbolFromInput();
-    if (!symbol) { toast('请输入股票代码', 'warn'); return; }
+    const raw = (document.getElementById('trendSymbolInput')?.value || '').trim();
+    if (!raw) { toast('请输入股票代码或名称', 'warn'); return; }
+    const symbol = await resolveTrendSymbolInput();
+    if (!symbol) { toast('未找到匹配的股票，请从下拉建议中选择', 'warn'); return; }
     const horizon = parseInt(document.getElementById('trendHorizonSelect')?.value || '10', 10);
     const btn = document.getElementById('btnRunForecast');
     btn.disabled = true; btn.textContent = '⏳ 研判中...';
@@ -5804,8 +5824,10 @@
   }
 
   async function runExplain(btn) {
-    const symbol = trendSymbolFromInput();
-    if (!symbol) { toast('请输入股票代码', 'warn'); return; }
+    const raw = (document.getElementById('trendSymbolInput')?.value || '').trim();
+    if (!raw) { toast('请输入股票代码或名称', 'warn'); return; }
+    const symbol = await resolveTrendSymbolInput();
+    if (!symbol) { toast('未找到匹配的股票，请从下拉建议中选择', 'warn'); return; }
     const horizon = parseInt(document.getElementById('trendHorizonSelect')?.value || '10', 10);
     const area = document.getElementById('trend-result');
     btn.disabled = true;

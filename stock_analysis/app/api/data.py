@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
@@ -35,6 +36,28 @@ def get_failover() -> FailoverManager:
     if _failover is None:
         _failover = create_default_failover_manager(tushare_token=settings.TUSHARE_TOKEN)
     return _failover
+
+
+_SYMBOL_RE = re.compile(r"(\d{6})(?:\.(?:SH|SZ|BJ))?", re.IGNORECASE)
+
+
+async def resolve_stock_symbol(symbol: str) -> str:
+    """把股票名称解析成 6 位代码；带后缀的代码统一保留后缀。"""
+    text = (symbol or "").strip()
+    if re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ))?", text, re.IGNORECASE):
+        return text
+    m = _SYMBOL_RE.search(text)
+    if m:
+        return m.group(1)
+    from app.stocks import get_stock_list, search_in_list
+    try:
+        stocks = await asyncio.wait_for(get_stock_list(), timeout=8.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="股票列表加载超时，请稍后重试")
+    hits = search_in_list(stocks, text, limit=1)
+    if not hits:
+        raise HTTPException(status_code=404, detail=f"未找到股票: {symbol}")
+    return hits[0]["symbol"]
 
 
 # -- Schemas --
@@ -75,6 +98,8 @@ async def get_kline(
     db: AsyncSession = Depends(get_db),
 ):
     """Get K-line data. Watchlist stocks read from cache (NF-005)."""
+    symbol = await resolve_stock_symbol(symbol)
+
     # 1. Try local cache (watchlist stocks)
     result = await db.execute(
         select(KlineCache)

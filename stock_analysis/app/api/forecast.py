@@ -39,10 +39,15 @@ _BENCH_FAIL_TTL = 60.0
 _CODE_RE = re.compile(r"(\d{6})(?:\.(SH|SZ|BJ|sh|sz|bj))?")
 
 
-def _resolve_code(symbol: str) -> str:
+async def _resolve_code(symbol: str) -> str:
     m = _CODE_RE.search(symbol or "")
+    if m:
+        return m.group(1)
+    from app.api.data import resolve_stock_symbol
+    resolved = await resolve_stock_symbol(symbol)
+    m = _CODE_RE.search(resolved or "")
     if not m:
-        raise HTTPException(status_code=400, detail=f"无法解析股票代码: {symbol}")
+        raise HTTPException(status_code=404, detail=f"未找到股票: {symbol}")
     return m.group(1)
 
 
@@ -245,7 +250,7 @@ async def signal_accuracy(
     """研判信号的历史准确率（walk-forward，无未来数据泄漏）。"""
     from app.signal_eval import evaluate_signal_accuracy
 
-    code = _resolve_code(symbol)
+    code = await _resolve_code(symbol)
     try:
         df, bench = await asyncio.wait_for(
             asyncio.gather(_fetch_klines(code, 1500), bench_history()),
@@ -274,7 +279,7 @@ async def stock_forecast(
     days: int = Query(700, ge=120, le=1500, description="拉取的日历天数"),
 ):
     """个股涨跌研判：技术打分 + 历史条件概率 + 关键价位 + 情景推演。"""
-    code = _resolve_code(symbol)
+    code = await _resolve_code(symbol)
     try:
         payload = await asyncio.wait_for(
             _compute_stock_payload(code, horizon, days), timeout=40.0,
@@ -467,7 +472,7 @@ async def explain_forecast(payload: Dict[str, Any]):
     horizon = int(payload.get("horizon") or 10)
     horizon = max(3, min(30, horizon))
     days = max(120, min(1500, int(payload.get("days") or 700)))
-    code = _resolve_code(symbol)
+    code = await _resolve_code(symbol)
 
     result = await asyncio.wait_for(
         _compute_stock_payload(code, horizon, days), timeout=40.0,
