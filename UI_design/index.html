@@ -4118,7 +4118,7 @@
     const curve = result.equity_curve || [];
     const ytdCurve = lastYear ? curve.filter(p => p.date.startsWith(lastYear)) : [];
     const ytdDd = btDrawdownSeries(ytdCurve);
-    const ytdTrades = (result.trades || []).filter(t => t.side === 'sell' && (t.date || '').startsWith(lastYear || ' '));
+    const ytdTrades = (result.trades || []).filter(t => t.side === 'sell' && (t.date || '').startsWith(lastYear || ''));
     const ytdWins = ytdTrades.filter(t => (t.pnl_pct || 0) > 0).length;
 
     const rows = [
