@@ -430,7 +430,13 @@ async def get_industry_history(code: str, days: int = 400) -> pd.DataFrame:
     """
     df, stale = _read_csv_stale(_hist_path(code), HIST_TTL_SECONDS)
     if df is None:
-        df = await asyncio.to_thread(_fetch_history_sync, code)
+        try:
+            df = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_history_sync, code), timeout=8.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"industry history fetch timed out for {code}")
+            df = None
     elif stale:
         _prewarm_histories([code])
     if df is None or df.empty:
@@ -787,7 +793,7 @@ async def resolve_stock_industry(symbol: str) -> Optional[Dict[str, Any]]:
         return ak.stock_profile_cninfo(symbol=code)
 
     try:
-        df = await asyncio.to_thread(_profile)
+        df = await asyncio.wait_for(asyncio.to_thread(_profile), timeout=5.0)
         if df is None or df.empty:
             return None
         csrc = str(df.iloc[0].get("所属行业") or "")

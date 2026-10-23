@@ -33,8 +33,9 @@ from app.forecast import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_BENCH_CACHE: Dict[str, Any] = {"ts": 0.0, "df": None}
+_BENCH_CACHE: Dict[str, Any] = {"ts": 0.0, "df": None, "fail_ts": 0.0}
 _BENCH_TTL = 600.0
+_BENCH_FAIL_TTL = 60.0
 _CODE_RE = re.compile(r"(\d{6})(?:\.(SH|SZ|BJ|sh|sz|bj))?")
 
 
@@ -74,18 +75,25 @@ async def bench_history(symbol: str = "sh000300", name: str = "沪深300") -> pd
     now = time.time()
     if _BENCH_CACHE["df"] is not None and now - _BENCH_CACHE["ts"] < _BENCH_TTL:
         return _BENCH_CACHE["df"]
+    if _BENCH_CACHE["df"] is None and now - _BENCH_CACHE["fail_ts"] < _BENCH_FAIL_TTL:
+        return pd.DataFrame()
 
     def _load():
         import akshare as ak
         return ak.stock_zh_index_daily(symbol=symbol)
 
     try:
-        df = await asyncio.to_thread(_load)
+        df = await asyncio.wait_for(asyncio.to_thread(_load), timeout=8.0)
         df = _to_df(df)
-        _BENCH_CACHE.update({"ts": now, "df": df})
+        _BENCH_CACHE.update({"ts": now, "df": df, "fail_ts": 0.0})
         return df
+    except asyncio.TimeoutError:
+        logger.warning("bench history timed out, using cached/empty")
+        _BENCH_CACHE["fail_ts"] = now
+        return _BENCH_CACHE["df"] if _BENCH_CACHE["df"] is not None else pd.DataFrame()
     except Exception as exc:
         logger.warning(f"bench history failed: {exc}")
+        _BENCH_CACHE["fail_ts"] = now
         return _BENCH_CACHE["df"] if _BENCH_CACHE["df"] is not None else pd.DataFrame()
 
 
@@ -110,9 +118,14 @@ async def _fetch_klines(code: str, days: int) -> pd.DataFrame:
     end = datetime.now().strftime("%Y%m%d")
     start = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     try:
-        kl = await mgr.fetch_with_failover(
-            DataType.KLINE, code, frequency="D", start_date=start, end_date=end,
+        kl = await asyncio.wait_for(
+            mgr.fetch_with_failover(
+                DataType.KLINE, code, frequency="D", start_date=start, end_date=end,
+            ),
+            timeout=20.0,
         )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"行情获取超时: {code}")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"行情获取失败: {exc}")
     df = _to_df(kl)
@@ -152,22 +165,44 @@ def _chart_payload(df: pd.DataFrame, limit: int = 250) -> Dict[str, Any]:
     }
 
 
+async def _sector_for_stock(code: str):
+    """行业映射与历史并行获取；失败时返回 (None, None)，不阻塞研判主流程。"""
+    try:
+        info = await asyncio.wait_for(ind.resolve_stock_industry(code), timeout=6.0)
+    except asyncio.TimeoutError:
+        logger.warning(f"sector resolve timed out for {code}")
+        return None, None
+    except Exception as exc:
+        logger.warning(f"sector resolve failed for {code}: {exc}")
+        return None, None
+    if not info:
+        return None, None
+
+    try:
+        hist = await asyncio.wait_for(
+            ind.get_industry_history(info["code"], days=300), timeout=10.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"sector history timed out for {code}")
+        return info, None
+    except Exception as exc:
+        logger.warning(f"sector history failed for {code}: {exc}")
+        return info, None
+    return info, hist
+
+
 async def _compute_stock_payload(code: str, horizon: int, days: int) -> Dict[str, Any]:
     """个股研判的唯一计算入口，保证 /stock 与 /explain 的数字完全一致。"""
-    df, bench = await asyncio.gather(_fetch_klines(code, days), bench_history())
+    (df, bench), (sector_info, hist) = await asyncio.gather(
+        asyncio.gather(_fetch_klines(code, days), bench_history()),
+        _sector_for_stock(code),
+    )
 
     sector_rel = None
-    sector_info = None
-    try:
-        sector_info = await ind.resolve_stock_industry(code)
-        if sector_info:
-            hist = await ind.get_industry_history(sector_info["code"], days=300)
-            if not hist.empty and not bench.empty:
-                sector_rel = relative_strength(hist, bench, f"申万{sector_info['name']}行业")
-                sector_rel["industry"] = sector_info
-                sector_rel["metrics"] = ind.industry_metrics(hist)
-    except Exception as exc:
-        logger.warning(f"sector relative failed for {code}: {exc}")
+    if sector_info and hist is not None and not hist.empty and not bench.empty:
+        sector_rel = relative_strength(hist, bench, f"申万{sector_info['name']}行业")
+        sector_rel["industry"] = sector_info
+        sector_rel["metrics"] = ind.industry_metrics(hist)
 
     payload = build_stock_forecast(df, bench, sector_rel=sector_rel, horizon=horizon)
     if not payload.get("available"):
@@ -212,7 +247,12 @@ async def signal_accuracy(
 
     code = _resolve_code(symbol)
     try:
-        df, bench = await asyncio.gather(_fetch_klines(code, 1500), bench_history())
+        df, bench = await asyncio.wait_for(
+            asyncio.gather(_fetch_klines(code, 1500), bench_history()),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"准确率回测数据获取超时: {code}")
     except HTTPException:
         raise
     except Exception as exc:
@@ -236,7 +276,11 @@ async def stock_forecast(
     """个股涨跌研判：技术打分 + 历史条件概率 + 关键价位 + 情景推演。"""
     code = _resolve_code(symbol)
     try:
-        payload = await _compute_stock_payload(code, horizon, days)
+        payload = await asyncio.wait_for(
+            _compute_stock_payload(code, horizon, days), timeout=40.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"研判超时，请稍后重试: {code}")
     except HTTPException:
         raise
     except Exception as exc:
@@ -425,7 +469,9 @@ async def explain_forecast(payload: Dict[str, Any]):
     days = max(120, min(1500, int(payload.get("days") or 700)))
     code = _resolve_code(symbol)
 
-    result = await _compute_stock_payload(code, horizon, days)
+    result = await asyncio.wait_for(
+        _compute_stock_payload(code, horizon, days), timeout=40.0,
+    )
 
     from app.model_gateway import get_model_gateway
     from app.utils.json_extract import parse_llm_json

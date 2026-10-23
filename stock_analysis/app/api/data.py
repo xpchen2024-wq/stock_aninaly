@@ -101,9 +101,12 @@ async def get_kline(
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 
     try:
-        klines = await manager.fetch_with_failover(
-            DataType.KLINE, symbol,
-            frequency=frequency, start_date=start_date, end_date=end_date,
+        klines = await asyncio.wait_for(
+            manager.fetch_with_failover(
+                DataType.KLINE, symbol,
+                frequency=frequency, start_date=start_date, end_date=end_date,
+            ),
+            timeout=30.0,
         )
         data = [
             {

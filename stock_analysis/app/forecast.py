@@ -590,10 +590,12 @@ def market_regime(index_df: pd.DataFrame, name: str = "沪深300") -> Dict[str, 
 
 def relative_strength(stock_df: pd.DataFrame, bench_df: pd.DataFrame,
                       bench_name: str = "沪深300", limit: int = 250) -> Dict[str, Any]:
-    a = _to_df(stock_df)[["date", "close"]].rename(columns={"close": "stock"})
-    b = _to_df(bench_df)[["date", "close"]].rename(columns={"close": "bench"})
-    if a.empty or b.empty:
+    a = _to_df(stock_df)
+    b = _to_df(bench_df)
+    if a.empty or b.empty or "date" not in a or "close" not in a or "date" not in b or "close" not in b:
         return {"available": False}
+    a = a[["date", "close"]].rename(columns={"close": "stock"})
+    b = b[["date", "close"]].rename(columns={"close": "bench"})
     m = a.merge(b, on="date", how="inner").sort_values("date")
     if len(m) < 25:
         return {"available": False}
@@ -694,8 +696,9 @@ def build_stock_forecast(
         return {"available": False, "reason": "K 线数据不足 30 根，无法研判"}
 
     s = ta.snapshot(df)
-    bench = market_regime(bench_df, bench_name) if bench_df is not None else {"available": False, "name": bench_name}
-    rel = relative_strength(df, bench_df, bench_name) if bench_df is not None else None
+    has_bench = bench_df is not None and not bench_df.empty
+    bench = market_regime(bench_df, bench_name) if has_bench else {"available": False, "name": bench_name}
+    rel = relative_strength(df, bench_df, bench_name) if has_bench else None
 
     tech = technical_score(s, rel)
     cond = conditional_outcome(df, horizon)
