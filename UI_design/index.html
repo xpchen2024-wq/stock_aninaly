@@ -3027,12 +3027,12 @@
       if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
       return resp.json();
     },
-    async post(path, body) {
+    async post(path, body, timeoutMs) {
       const resp = await this._fetch(API_BASE + path, {
         method: 'POST',
         headers: { ...this._headers(), 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
-      });
+      }, timeoutMs);
       if (resp.status === 401 || resp.status === 403) { handle401(); throw new Error(`${resp.status} Unauthorized`); }
       if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
       return resp.status === 204 ? null : resp.json();
@@ -6657,7 +6657,7 @@
     updateAgentPhase(1, 'running', '4 个分析师并行采集数据...');
     let agentResult = null;
     try {
-      agentResult = await API.post('/api/v1/agent/run', { symbol, name });
+      agentResult = await API.post('/api/v1/agent/run', { symbol, name }, 600000);
       // Update phases based on result
       updateAgentPhase(1, 'done', '基本面、情绪、新闻、技术信号已生成');
       updateAgentPhase(2, 'done', '看涨 vs 看跌辩论完成');

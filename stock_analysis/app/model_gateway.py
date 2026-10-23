@@ -141,6 +141,10 @@ class ModelGateway:
             logger.info(f"Model '{config_id}' recovered after {info['failures']} failure(s)")
         self._health.pop(config_id, None)
 
+    def reset_health(self, config_id: str) -> None:
+        """Clear cooldown state after a config is updated (e.g. model replaced)."""
+        self._health.pop(config_id, None)
+
     def _candidate_configs(self, config_id: Optional[str]) -> List[LLMConfig]:
         """按优先级返回可用模型候选（跳过冷却中的模型）。"""
         if config_id:
@@ -415,6 +419,7 @@ def register_model_config(gateway: ModelGateway, cfg: Any, secret: str) -> bool:
         temperature=cfg.temperature if cfg.temperature is not None else 0.7,
         is_enabled=cfg.is_enabled,
     ))
+    gateway.reset_health(str(cfg.id))
     return True
 
 
