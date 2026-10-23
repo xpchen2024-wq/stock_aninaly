@@ -2964,6 +2964,7 @@
   // AI 趋势分析：代码 / 名称联想
   attachStockSuggest('trendSymbolInput', 'trendStockSuggest', {
     format: s => `${s.symbol}.${s.market || ''} ${s.name}`,
+    onSelect: () => { loadKline(true); },
   });
 
   async function addStockToWatchlist(symbol, name) {
@@ -5200,8 +5201,10 @@
     if (!raw) return '';
     const m = raw.match(/(\d{6}(?:\.(?:SZ|SH|BJ|ss|sz|sh|bj))?)/);
     if (m) return m[1];
-    const hits = await API.get('/api/v1/data/search', { q: raw, limit: 1 }, 10000).catch(() => []);
-    const hit = Array.isArray(hits) ? hits[0] : null;
+    const hits = await API.get('/api/v1/data/search', { q: raw, limit: 5 }, 10000).catch(() => []);
+    if (!Array.isArray(hits) || !hits.length) return '';
+    const exact = hits.find(h => h.name === raw || h.symbol === raw);
+    const hit = exact || (hits.length === 1 ? hits[0] : null);
     if (!hit) return '';
     const canonical = `${hit.symbol}.${hit.market || ''}`;
     if (input) input.value = `${canonical} ${hit.name}`;
@@ -5236,7 +5239,7 @@
     // 名称输入先解析成 6 位代码，避免把中文名直接发给行情源
     const symbol = await resolveTrendSymbolInput();
     if (!symbol) {
-      document.getElementById('klineTitle').textContent = `📈 ${raw} 未找到匹配的股票`;
+      document.getElementById('klineTitle').textContent = `📈 ${raw} 请从下拉建议中选择股票`;
       return;
     }
 
