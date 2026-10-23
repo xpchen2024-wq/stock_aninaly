@@ -70,6 +70,12 @@ async def lifespan(app: FastAPI):
         await load_configs_from_db()
     except Exception as exc:
         logger.error(f"Failed to load model configs at startup: {exc}", exc_info=True)
+    # 后台预热行业分析缓存（申万接口约 6s），避免首屏干等
+    try:
+        from app.industry import warm_cache
+        warm_cache()
+    except Exception as exc:
+        logger.warning(f"Failed to warm industry cache: {exc}")
     yield
     logger.info("Shutting down...")
     await close_db()
