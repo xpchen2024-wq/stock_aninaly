@@ -463,16 +463,17 @@ class AvailableModelsRequest(BaseModel):
     platform: str
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    config_id: Optional[str] = None
 
 
 @router.post("/available")
-async def fetch_available_models(req: AvailableModelsRequest):
+async def fetch_available_models(req: AvailableModelsRequest, db: AsyncSession = Depends(get_db)):
     """Fetch available model IDs from a provider's /v1/models endpoint.
 
     Proxies the request through the backend to avoid CORS / network issues.
     Falls back to known model lists when the provider does not respond.
     """
-    logger.info(f"Fetching available models: platform={req.platform}, base_url={req.base_url}")
+    logger.info(f"Fetching available models: platform={req.platform}, base_url={req.base_url}, config_id={req.config_id}")
     # --- Determine base URL ---
     base_url = (req.base_url or "").rstrip("/")
     if not base_url:
@@ -481,7 +482,7 @@ async def fetch_available_models(req: AvailableModelsRequest):
             "openai": "https://api.openai.com/v1",
             "deepseek": "https://api.deepseek.com/v1",
             "openrouter": "https://openrouter.ai/api/v1",
-            "opencodezen": "https://opencode.ai/zen/v1",
+            "opencodezen": "https://opencode.ai/inference/openai/v1",
         }
         base_url = platform_defaults.get(req.platform, "")
 
@@ -490,18 +491,37 @@ async def fetch_available_models(req: AvailableModelsRequest):
         "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"],
         "deepseek": ["deepseek-chat", "deepseek-reasoner"],
         "openrouter": [
-            "openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4-turbo",
-            "anthropic/claude-sonnet-4", "anthropic/claude-3.5-sonnet",
-            "google/gemini-2.5-pro", "google/gemini-2.5-flash",
-            "meta-llama/llama-4-maverick", "deepseek/deepseek-chat",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "deepseek/deepseek-v4.1-flash",
+            "z-ai/glm-5.3-prime",
+            "xingchen-agi/xing4.0-29b-a4b:free",
+            "openai/gpt-4o", "openai/gpt-4o-mini",
+            "anthropic/claude-sonnet-4", "google/gemini-2.5-pro",
+            "deepseek/deepseek-chat",
         ],
         "opencodezen": [
-            "opencode/gpt-5.5", "opencode/claude-4.5", "opencode/claude-sonnet-4",
-            "opencode/gemini-2.5-pro", "opencode/gpt-4o",
+            "deepseek-v4.1-flash-free", "glm-5.3-flash-free",
+            "nemotron-3.5-lightning-free", "mimo-v2.6-flash-free",
+            "big-pickle", "deepseek-v4.1-flash", "glm-5.3",
+            "gpt-5.5", "claude-sonnet-4.5", "gemini-3.1-pro",
         ],
     }
 
     api_key = (req.api_key or "").strip()
+
+    # --- Reuse the stored key for edit-mode refreshes (permission-safe) ---
+    if req.config_id:
+        stored = (await db.execute(
+            select(ModelConfig).where(ModelConfig.id == req.config_id)
+        )).scalar_one_or_none()
+        if stored and stored.platform == req.platform:
+            if not base_url and stored.base_url:
+                base_url = stored.base_url.rstrip("/")
+            if not api_key:
+                try:
+                    api_key = decrypt_api_key(stored.api_key_encrypted, settings.ENCRYPTION_KEY)
+                except Exception as exc:
+                    logger.warning(f"Failed to decrypt stored API key for available models: {exc}")
 
     # --- Try live fetch from provider ---
     try:
@@ -509,8 +529,14 @@ async def fetch_available_models(req: AvailableModelsRequest):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        models_url = (
+            "https://opencode.ai/inference/v1/models"
+            if req.platform == "opencodezen"
+            else f"{base_url}/models"
+        )
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
-            resp = await client.get(f"{base_url}/models", headers=headers)
+            resp = await client.get(models_url, headers=headers)
             if resp.status_code == 200:
                 data = resp.json()
                 items = data.get("data", [])

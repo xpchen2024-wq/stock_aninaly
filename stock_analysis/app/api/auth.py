@@ -56,6 +56,7 @@ class TokenResponse(BaseModel):
 class UserInfo(BaseModel):
     id: str
     username: str
+    nickname: Optional[str] = None
     email: str
     is_superuser: bool
 
@@ -146,6 +147,7 @@ async def get_me(user: User = Depends(get_current_user)):
     return UserInfo(
         id=str(user.id),
         username=user.username,
+        nickname=user.nickname,
         email=user.email,
         is_superuser=user.is_superuser,
     )

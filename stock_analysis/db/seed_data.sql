@@ -4,18 +4,19 @@
 -- ============================================================================
 
 -- ============================================================================
--- 1. Default Admin User (password: admin123)
+-- 1. Default Admin User (username: admin, password: admin123, nickname: 天才交易员)
 -- ============================================================================
-INSERT INTO users (id, username, email, hashed_password, is_active, is_superuser)
+INSERT INTO users (id, username, nickname, email, hashed_password, is_active, is_superuser)
 VALUES (
     'a0000000-0000-0000-0000-000000000001',
     'admin',
+    '天才交易员',
     'admin@aistock.local',
     -- bcrypt hash of 'admin123'
     '$2b$12$LJ3m4ys3Lk0TSwHlvX0LaObFJiYiXpPLFSVYQvMLkRMCvVNjGBqSi',
     TRUE,
     TRUE
-) ON CONFLICT (username) DO NOTHING;
+) ON CONFLICT DO NOTHING;
 
 -- ============================================================================
 -- 2. Default Watchlist Group

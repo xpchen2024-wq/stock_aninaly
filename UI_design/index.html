@@ -679,7 +679,7 @@
     <div class="avatar">U</div>
     <div class="info">
       <div class="name">用户</div>
-      <div class="role">Pro 投资者</div>
+      <div class="role">天才交易员</div>
     </div>
   </div>
 </aside>
@@ -2752,7 +2752,9 @@
   // Modal
   document.getElementById('btnAddModel')?.addEventListener('click', () => {
     // Reset form fields
-    document.getElementById('modalModelName').value = '';
+    const addNameInput = document.getElementById('modalModelName');
+    addNameInput.value = '';
+    addNameInput.dataset.autoValue = '';
     document.getElementById('modalModelApiKey').value = '';
     document.getElementById('modalModelMaxTokens').value = '4096';
     document.getElementById('modalModelTemp').value = '0.7';
@@ -2769,6 +2771,8 @@
     const models = cached && cached.length ? cached : defaults.models;
     populateModelDropdown('modal', models, '');
     document.getElementById('modalAddModel').style.display = 'flex';
+    // OpenRouter's model list is public and large; load it automatically.
+    if (platform === 'openrouter') refreshProviderModels('modal', true);
   });
   document.getElementById('modalAddModel')?.addEventListener('click', function(e) {
     if (e.target === this) this.style.display = 'none';
@@ -3082,6 +3086,14 @@
   }
 
   // -- Unified Auth (全局统一登录态) --
+  function updateSidebarUser() {
+    const u = Auth.user || {};
+    const nameEl = document.querySelector('.sidebar-footer .name');
+    const roleEl = document.querySelector('.sidebar-footer .role');
+    if (nameEl) nameEl.textContent = u.nickname || u.username || '用户';
+    if (roleEl) roleEl.textContent = u.is_superuser ? '超级管理员' : '投资者';
+  }
+
   const Auth = {
     token: localStorage.getItem('stock_token') || '',
     user: JSON.parse(localStorage.getItem('stock_user') || 'null'),
@@ -3121,6 +3133,7 @@
         // 拉取用户信息
         try { this.user = await this._me(); } catch (e) { this.user = { username }; }
         localStorage.setItem('stock_user', JSON.stringify(this.user));
+        updateSidebarUser();
         this.renderStatusBar();
         window.dispatchEvent(new Event('authchange'));
         return true;
@@ -3151,6 +3164,7 @@
       try {
         this.user = await this._me();
         localStorage.setItem('stock_user', JSON.stringify(this.user));
+        updateSidebarUser();
         this.renderStatusBar();
         return true;
       } catch (e) {
@@ -3164,7 +3178,7 @@
       const bar = document.getElementById('authStatusBar');
       if (!bar) return;
       if (this.isLoggedIn()) {
-        const name = this.user?.username || '已登录';
+        const name = this.user?.nickname || this.user?.username || '已登录';
         bar.innerHTML = `
           <span style="color:var(--accent-green);">✅ 已登录</span>
           <span style="color:var(--text-muted);">·</span>
@@ -3185,6 +3199,7 @@
     if (e.key === 'stock_token' || e.key === 'stock_user') {
       Auth.token = localStorage.getItem('stock_token') || '';
       Auth.user = JSON.parse(localStorage.getItem('stock_user') || 'null');
+      updateSidebarUser();
       Auth.renderStatusBar();
       window.dispatchEvent(new Event('authchange'));
     }
@@ -3412,8 +3427,8 @@
   const PLATFORM_DEFAULTS = {
     openai: { baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'] },
     deepseek: { baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] },
-    openrouter: { baseUrl: 'https://openrouter.ai/api/v1', models: ['openai/gpt-4o', 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'] },
-    opencodezen: { baseUrl: 'https://opencode.ai/zen/v1', models: ['opencode/gpt-5.5', 'opencode/claude-4.5', 'opencode/claude-sonnet-4', 'opencode/gemini-2.5-pro', 'opencode/gpt-4o'] },
+    openrouter: { baseUrl: 'https://openrouter.ai/api/v1', models: ['nvidia/nemotron-3-ultra-550b-a55b:free', 'deepseek/deepseek-v4.1-flash', 'z-ai/glm-5.3-prime', 'xingchen-agi/xing4.0-29b-a4b:free', 'openai/gpt-4o', 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'] },
+    opencodezen: { baseUrl: 'https://opencode.ai/inference/openai/v1', models: ['deepseek-v4.1-flash-free', 'glm-5.3-flash-free', 'nemotron-3.5-lightning-free', 'mimo-v2.6-flash-free', 'big-pickle', 'deepseek-v4.1-flash', 'glm-5.3', 'gpt-5.5', 'claude-sonnet-4.5', 'gemini-3.1-pro'] },
     custom: { baseUrl: '', models: [] }
   };
   let _fetchedModelCache = {};  // { platform: [modelId, ...] }
@@ -3449,6 +3464,8 @@
     const cached = _fetchedModelCache[platform];
     const models = cached && cached.length ? cached : defaults.models;
     populateModelDropdown(prefix, models, '');
+    // OpenRouter exposes its full model list publicly; fetch it on demand.
+    if (!cached && platform === 'openrouter') refreshProviderModels(prefix, true);
   }
 
   // --- Fill model <select> ---
@@ -3458,22 +3475,25 @@
     const customInput = document.getElementById(ids.modelCustom);
     if (!sel) return;
 
+    const seen = new Set();
     let opts = '<option value="">-- 选择模型 --</option>';
     let found = false;
     models.forEach(m => {
+      if (!m || seen.has(m)) return;
+      seen.add(m);
       const selected = (currentModel && m === currentModel) ? ' selected' : '';
       if (selected) found = true;
-      opts += `<option value="${m}"${selected}>${m}</option>`;
+      opts += `<option value="${escapeHtml(m)}"${selected}>${escapeHtml(m)}</option>`;
     });
+    // Keep the current model visible even when the provider list has changed
+    if (currentModel && !found && currentModel !== '__custom__') {
+      opts += `<option value="${escapeHtml(currentModel)}" selected>${escapeHtml(currentModel)} (当前)</option>`;
+    }
     // Always add "Custom..." to allow manual entry
     opts += '<option value="__custom__">✏️ 手动输入...</option>';
-    // If current model wasn't in the list but was provided, add it
-    if (currentModel && !found && currentModel !== '__custom__') {
-      opts = opts.replace('</select>', '') + `<option value="${currentModel}" selected>${currentModel} (当前)</option>`;
-    }
     sel.innerHTML = opts;
 
-    // Initialize searchable dropdown
+    // Initialize or refresh the searchable dropdown
     makeModelSearchable(ids.modelSelect);
 
     // Show/hide custom input
@@ -3487,14 +3507,22 @@
   // --- Create fuzzy-searchable dropdown wrapper ---
   function makeModelSearchable(selectId) {
     const select = document.getElementById(selectId);
-    if (!select || select.dataset.searchable === '1') return;
+    if (!select) return;
+
+    // Already initialized: just refresh the option snapshot and displayed value
+    if (select.dataset.searchable === '1' && select._refreshSearchable) {
+      select._refreshSearchable();
+      return;
+    }
     select.dataset.searchable = '1';
 
-    const options = Array.from(select.options).map(o => ({
-      value: o.value,
-      text: o.text,
-      selected: o.selected,
-    }));
+    let options = [];
+    function readOptions() {
+      options = Array.from(select.options)
+        .map(o => ({ value: o.value, text: o.text, selected: o.selected }))
+        .filter(o => o.value !== '');
+    }
+    readOptions();
 
     // Build wrapper
     const wrapper = document.createElement('div');
@@ -3505,39 +3533,97 @@
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'searchable-select-input';
-    input.placeholder = '搜索/选择模型...';
+    input.placeholder = '输入关键字模糊搜索模型...';
     input.style.cssText = 'width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);color:var(--text-primary);font-size:13px;';
     input.setAttribute('autocomplete', 'off');
 
-    // Dropdown list
+    // Dropdown list (fixed to body so the modal's overflow never clips it)
     const dropdown = document.createElement('div');
     dropdown.className = 'searchable-select-dropdown';
-    dropdown.style.cssText = 'position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-lg);max-height:280px;overflow-y:auto;z-index:100;display:none;';
+    dropdown.style.cssText = 'position:fixed;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-lg);max-height:360px;overflow-y:auto;z-index:10000;display:none;';
+    document.body.appendChild(dropdown);
 
     wrapper.appendChild(input);
-    wrapper.appendChild(dropdown);
     select.style.display = 'none';
     select.parentNode.insertBefore(wrapper, select);
 
     let highlightedIndex = -1;
 
+    function positionDropdown() {
+      if (dropdown.style.display === 'none') return;
+      const rect = input.getBoundingClientRect();
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const margin = 4;
+      let width = Math.max(rect.width, 320);
+      width = Math.min(width, vw - 16);
+      const left = Math.min(Math.max(8, rect.left), vw - width - 8);
+      const spaceBelow = vh - rect.bottom - margin - 8;
+      const spaceAbove = rect.top - margin - 8;
+      let top, maxHeight;
+      if (spaceBelow >= 160 || spaceBelow >= spaceAbove) {
+        top = rect.bottom + margin;
+        maxHeight = Math.min(360, Math.max(120, spaceBelow));
+      } else {
+        maxHeight = Math.min(360, Math.max(120, spaceAbove));
+        top = Math.max(8, rect.top - margin - maxHeight);
+      }
+      dropdown.style.left = left + 'px';
+      dropdown.style.top = top + 'px';
+      dropdown.style.width = width + 'px';
+      dropdown.style.maxHeight = maxHeight + 'px';
+    }
+
+    function normalize(s) {
+      return (s || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+    }
+
+    function isSubsequence(text, query) {
+      let qi = 0;
+      for (const ch of text) {
+        if (ch === query[qi]) qi++;
+        if (qi === query.length) return true;
+      }
+      return false;
+    }
+
+    function filterOptions(filter) {
+      const raw = (filter || '').trim();
+      const q = normalize(raw);
+      if (!q) return options.slice();
+
+      const tokens = raw.toLowerCase().split(/[^a-z0-9\u4e00-\u9fff]+/).filter(Boolean);
+      const exact = [];
+      const fuzzy = [];
+      options.forEach(opt => {
+        if (opt.value === '__custom__') return;
+        const norm = normalize(opt.text);
+        // Prefer models containing every typed token as a substring
+        if (tokens.length && tokens.every(t => norm.includes(t))) {
+          exact.push({ opt, score: Math.max(0, norm.indexOf(tokens[0])) });
+        } else if (norm.includes(q)) {
+          fuzzy.push({ opt, score: 100 + norm.indexOf(q) });
+        } else if (isSubsequence(norm, q)) {
+          fuzzy.push({ opt, score: 1000 + norm.length });
+        }
+      });
+      // Exact token matches win; fuzzy matches are only used when nothing exact exists
+      const ranked = exact.length ? exact : fuzzy;
+      ranked.sort((a, b) => a.score - b.score || a.opt.text.localeCompare(b.opt.text));
+      const custom = options.find(o => o.value === '__custom__');
+      if (custom) ranked.push({ opt: custom, score: 99999 });
+      return ranked.map(x => x.opt);
+    }
+
     function render(filter = '') {
-      const lower = filter.toLowerCase().trim();
+      const filtered = filterOptions(filter);
       dropdown.innerHTML = '';
       highlightedIndex = -1;
 
-      const filtered = options.filter(opt => {
-        if (opt.value === '__custom__') return true;
-        if (!lower) return true;
-        const text = opt.text.toLowerCase();
-        // Fuzzy match: all chars in order
-        let idx = 0;
-        for (const ch of text) {
-          if (ch === lower[idx]) idx++;
-          if (idx === lower.length) return true;
-        }
-        return false;
-      });
+      const header = document.createElement('div');
+      header.style.cssText = 'position:sticky;top:0;z-index:1;padding:6px 12px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:11px;color:var(--text-muted);';
+      const total = filtered.filter(o => o.value && o.value !== '__custom__').length;
+      header.textContent = filter.trim() ? `匹配 ${total} 个模型，继续输入可缩小范围` : `共 ${total} 个模型，点击选择或输入关键字筛选`;
+      dropdown.appendChild(header);
 
       if (filtered.length === 0) {
         const empty = document.createElement('div');
@@ -3550,35 +3636,21 @@
           const item = document.createElement('div');
           item.className = 'searchable-select-item';
           item.dataset.value = opt.value;
-          item.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:13px;transition:background .1s;';
+          item.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:12px;transition:background .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
           if (opt.value === '__custom__') {
             item.style.cssText += 'border-top:1px solid var(--border);color:var(--accent-blue);';
-            item.innerHTML = '✏️ 手动输入模型名...';
+            item.textContent = '✏️ 手动输入模型名...';
           } else {
-            const matchHtml = lower ? highlightMatch(opt.text, lower) : escapeHtml(opt.text);
-            item.innerHTML = matchHtml;
+            item.textContent = opt.text;
+            item.title = opt.text;
           }
-          item.addEventListener('mousedown', () => selectOption(opt.value));
+          item.addEventListener('mousedown', e => { e.preventDefault(); selectOption(opt.value); });
           item.addEventListener('mouseenter', () => highlightItem(i));
           dropdown.appendChild(item);
         });
       }
       dropdown.style.display = 'block';
-    }
-
-    function highlightMatch(text, query) {
-      // Simple highlight: wrap matching chars in <mark>
-      let result = '';
-      let qIdx = 0;
-      for (const ch of text) {
-        if (qIdx < query.length && ch.toLowerCase() === query[qIdx]) {
-          result += `<mark style="background:var(--accent-yellow);color:var(--text-primary);padding:0 2px;border-radius:2px;">${escapeHtml(ch)}</mark>`;
-          qIdx++;
-        } else {
-          result += escapeHtml(ch);
-        }
-      }
-      return result;
+      positionDropdown();
     }
 
     function highlightItem(index) {
@@ -3593,9 +3665,7 @@
     function selectOption(value) {
       select.value = value;
       const opt = options.find(o => o.value === value);
-      if (opt) {
-        input.value = opt.value === '__custom__' ? '' : opt.text;
-      }
+      input.value = opt && opt.value !== '__custom__' ? opt.text : '';
       dropdown.style.display = 'none';
       // Trigger change event on original select
       select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -3609,8 +3679,20 @@
       }
     }
 
+    function refresh() {
+      readOptions();
+      const selected = options.find(o => o.selected) || options.find(o => o.value === select.value);
+      input.value = selected && selected.value && selected.value !== '__custom__' ? selected.text : '';
+      // Show the full refreshed list rather than filtering by the current value
+      if (dropdown.style.display === 'block') render('');
+    }
+    select._refreshSearchable = refresh;
+
     input.addEventListener('input', e => render(e.target.value));
-    input.addEventListener('focus', () => render(input.value));
+    input.addEventListener('focus', () => { render(''); positionDropdown(); });
+    input.addEventListener('click', () => {
+      if (dropdown.style.display === 'none') render('');
+    });
     input.addEventListener('keydown', e => {
       const items = dropdown.querySelectorAll('.searchable-select-item');
       if (e.key === 'ArrowDown') {
@@ -3632,14 +3714,33 @@
 
     // Close on click outside
     document.addEventListener('click', e => {
-      if (!wrapper.contains(e.target)) dropdown.style.display = 'none';
+      if (!wrapper.contains(e.target) && !dropdown.contains(e.target)) {
+        dropdown.style.display = 'none';
+      }
     });
 
-    // Sync initial value
-    const initialOpt = options.find(o => o.selected) || options[0];
-    if (initialOpt) input.value = initialOpt.text;
+    window.addEventListener('resize', positionDropdown);
+    window.addEventListener('scroll', positionDropdown, true);
 
-    return { select, input, dropdown, render };
+    // Sync initial value
+    const initialOpt = options.find(o => o.selected) || options.find(o => o.value === select.value);
+    if (initialOpt && initialOpt.value && initialOpt.value !== '__custom__') input.value = initialOpt.text;
+
+    return { select, input, dropdown, render, refresh };
+  }
+
+  // --- Auto-fill config name from the selected model (manual edits win) ---
+  function syncConfigNameFromModel(prefix) {
+    const nameInput = document.getElementById(prefix === 'modal' ? 'modalModelName' : 'editModelName');
+    if (!nameInput) return;
+    const modelName = getSelectedModelName(prefix);
+    if (!modelName) return;
+    const autoValue = nameInput.dataset.autoValue || '';
+    const current = nameInput.value.trim();
+    // Only fill an empty name or one that still equals the last auto-filled value
+    if (current && current !== autoValue) return;
+    nameInput.value = modelName;
+    nameInput.dataset.autoValue = modelName;
   }
 
   // --- Toggle custom model input when dropdown changes ---
@@ -3651,10 +3752,23 @@
     if (sel.value === '__custom__') {
       customInput.style.display = 'block';
       customInput.focus();
+      syncConfigNameFromModel(prefix);
     } else {
       customInput.style.display = 'none';
+      syncConfigNameFromModel(prefix);
     }
   }
+
+  // Manual model entry also updates the suggested config name
+  ['modal', 'edit'].forEach(prefix => {
+    const ids = _idMap(prefix);
+    const customInput = document.getElementById(ids.modelCustom);
+    if (!customInput) return;
+    customInput.addEventListener('input', () => {
+      const sel = document.getElementById(ids.modelSelect);
+      if (sel && sel.value === '__custom__') syncConfigNameFromModel(prefix);
+    });
+  });
 
   // --- Get actual model name (from dropdown or custom input) ---
   function getSelectedModelName(prefix) {
@@ -3669,7 +3783,7 @@
   }
 
   // --- Refresh models from provider via backend ---
-  async function refreshProviderModels(prefix) {
+  async function refreshProviderModels(prefix, silent = false) {
     const ids = _idMap(prefix);
     const platform = document.getElementById(ids.platform)?.value;
     const apiKey = prefix === 'modal'
@@ -3684,9 +3798,13 @@
     if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = '⏳ 正在获取模型列表...'; }
 
     try {
-      const resp = await API.post('/api/v1/models/available', {
-        platform, base_url: baseUrl || null, api_key: apiKey || null,
-      });
+      const body = { platform, base_url: baseUrl || null, api_key: apiKey || null };
+      // Edit mode: let the backend reuse the stored key, but only for the
+      // config's original platform (never send one provider's key to another).
+      if (prefix === 'edit' && _editingModelId && platform === _editingPlatform) {
+        body.config_id = _editingModelId;
+      }
+      const resp = await API.post('/api/v1/models/available', body);
 
       const models = resp?.models || [];
       _fetchedModelCache[platform] = models;
@@ -3698,10 +3816,12 @@
         statusEl.style.color = 'var(--accent-green)';
         setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
       }
-      if (resp?.source === 'live') {
-        toast(`已刷新：${models.length} 个模型`, 'success');
-      } else {
-        toast(`使用内置列表：${models.length} 个模型（可配置 API Key 后重新刷新）`, 'info');
+      if (!silent) {
+        if (resp?.source === 'live') {
+          toast(`已刷新：${models.length} 个模型`, 'success');
+        } else {
+          toast(`使用内置列表：${models.length} 个模型（可配置 API Key 后重新刷新）`, 'info');
+        }
       }
     } catch (e) {
       if (statusEl) {
@@ -3956,6 +4076,7 @@
 
   // -- Edit Model --
   let _editingModelId = null;
+  let _editingPlatform = '';
 
   function editModel(id) {
     const m = _modelCache[id];
@@ -3963,9 +4084,15 @@
 
     _editingModelId = id;
     const platform = m.platform || 'openai';
+    _editingPlatform = platform;
     const currentModel = m.model_name || '';
 
-    document.getElementById('editModelName').value = m.name || '';
+    const editNameInput = document.getElementById('editModelName');
+    editNameInput.value = m.name || '';
+    // Treat the existing name as the default until the user edits it
+    editNameInput.dataset.autoValue = editNameInput.value;
+    const editCustomInput = document.getElementById('editModelCustom');
+    if (editCustomInput) { editCustomInput.value = ''; editCustomInput.style.display = 'none'; }
     document.getElementById('editModelPlatform').value = platform;
     document.getElementById('editModelBaseUrl').value = m.base_url || '';
     document.getElementById('editModelApiKey').value = '';
@@ -3980,6 +4107,9 @@
     populateModelDropdown('edit', models, currentModel);
 
     document.getElementById('modalEditModel').style.display = 'flex';
+    // Pull the provider's full model list in the background (edit mode can
+    // reuse the stored key via config_id).
+    refreshProviderModels('edit', true);
   }
 
   document.getElementById('btnSaveEditModel')?.addEventListener('click', async () => {

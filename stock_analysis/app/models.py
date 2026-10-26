@@ -38,6 +38,7 @@ class User(Base):
 
     id = Column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
     username = Column(String(64), unique=True, nullable=False, index=True)
+    nickname = Column(String(64), nullable=True)
     email = Column(String(255), unique=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)

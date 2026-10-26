@@ -19,8 +19,9 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS users (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    username        VARCHAR(64) UNIQUE NOT NULL,
-    email           VARCHAR(255) UNIQUE NOT NULL,
+    username      VARCHAR(64) UNIQUE NOT NULL,
+    nickname      VARCHAR(64),
+    email         VARCHAR(255) UNIQUE NOT NULL,
     hashed_password VARCHAR(255) NOT NULL,
     is_active       BOOLEAN DEFAULT TRUE NOT NULL,
     is_superuser    BOOLEAN DEFAULT FALSE NOT NULL,
