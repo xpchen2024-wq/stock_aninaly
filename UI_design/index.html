@@ -4552,7 +4552,7 @@
       }).join('');
 
       // Event delegation for watchlist actions
-      tbody.onclick = function(e) {
+      tbody.onclick = async function(e) {
         const btn = e.target.closest('button');
         if (!btn) return;
         if (btn.classList.contains('btn-wl-analyze')) {
@@ -4560,7 +4560,7 @@
         } else if (btn.classList.contains('btn-wl-remove')) {
           const id = btn.dataset.id;
           const item = items.find(i => i.id === id);
-          if (item && !confirm(`确认移除「${item.name}」？`)) return;
+          if (item && !(await confirmModal(`确认移除「${item.name}」？`))) return;
           removeWatchlist(id);
         }
       };
@@ -4573,6 +4573,35 @@
       }
     }
   };
+
+  // 居中自定义确认弹窗，替代浏览器原生 confirm
+  function confirmModal(message) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:2147483647;font-family:sans-serif;';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--bg-card,#fff);border:1px solid var(--border,#ddd);border-radius:12px;padding:24px 32px;min-width:320px;box-shadow:0 12px 40px rgba(0,0,0,0.25);text-align:center;color:var(--text-primary,#333);';
+      const msg = document.createElement('div');
+      msg.style.cssText = 'margin-bottom:22px;font-size:14px;white-space:pre-wrap;line-height:1.5;';
+      msg.textContent = message;
+      const btns = document.createElement('div');
+      btns.style.cssText = 'display:flex;gap:10px;justify-content:center;';
+      const cancel = document.createElement('button');
+      cancel.textContent = '取消';
+      cancel.style.cssText = 'padding:7px 18px;border-radius:8px;border:1px solid var(--border,#ccc);background:var(--bg-card,#fff);color:var(--text-secondary,#666);cursor:pointer;font-size:13px;';
+      const ok = document.createElement('button');
+      ok.textContent = '移除';
+      ok.style.cssText = 'padding:7px 18px;border-radius:8px;border:none;background:var(--accent-red,#d33);color:#fff;cursor:pointer;font-size:13px;';
+      cancel.onclick = () => { document.body.removeChild(overlay); resolve(false); };
+      ok.onclick = () => { document.body.removeChild(overlay); resolve(true); };
+      btns.appendChild(cancel);
+      btns.appendChild(ok);
+      box.appendChild(msg);
+      box.appendChild(btns);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+    });
+  }
 
   async function removeWatchlist(id) {
     try {
