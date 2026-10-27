@@ -1502,19 +1502,19 @@
         <div class="grid grid-4">
           <div class="stat-card">
             <div class="label">关注股票数</div>
-            <div class="value" style="font-size:20px;">12</div>
+            <div class="value" id="wl-watched-count" style="font-size:20px;">--</div>
           </div>
           <div class="stat-card">
             <div class="label">缓存 K线条数</div>
-            <div class="value" style="font-size:20px;">1,080</div>
+            <div class="value" id="wl-cached-quotes" style="font-size:20px;">--</div>
           </div>
           <div class="stat-card">
             <div class="label">缓存大小</div>
-            <div class="value" style="font-size:20px;">4.2 MB</div>
+            <div class="value" id="wl-cache-size" style="font-size:20px;">--</div>
           </div>
           <div class="stat-card">
             <div class="label">平均读取延迟</div>
-            <div class="value" style="font-size:20px; color: var(--accent-green);">320 ms</div>
+            <div class="value" id="wl-cache-latency" style="font-size:20px; color: var(--accent-green);">--</div>
           </div>
         </div>
       </div>
@@ -4520,12 +4520,35 @@
         return;
       }
 
-      // 批量拉取行情
+      // 批量拉取行情（并记录读取延迟）
       let quoteMap = {};
+      let avgLatencyMs = null;
       try {
         const symbols = items.map(i => i.symbol).filter(Boolean).join(',');
-        if (symbols) quoteMap = await API.get('/api/v1/data/quote/batch', { symbols }) || {};
+        if (symbols) {
+          const t0 = performance.now();
+          quoteMap = await API.get('/api/v1/data/quote/batch', { symbols }) || {};
+          const t1 = performance.now();
+          avgLatencyMs = Math.round(t1 - t0);
+        }
       } catch (e) { /* ignore */ }
+
+      // 缓存统计（真实数据，失败降级为 --）
+      let cacheStats = null;
+      try { cacheStats = await API.get('/api/v1/watchlist/cache-stats') || null; } catch (e) { /* ignore */ }
+      const applyStats = () => {
+        document.getElementById('wl-watched-count').textContent = String(items.length || 0);
+        const c = cacheStats || {};
+        document.getElementById('wl-cached-quotes').textContent = c.cached_quotes != null ? String(c.cached_quotes) : '--';
+        document.getElementById('wl-cache-size').textContent = c.memory_used || '--';
+        document.getElementById('wl-cache-latency').textContent = avgLatencyMs != null ? `${avgLatencyMs} ms` : '--';
+      };
+
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-muted);">暂无关注股票，请点击「➕ 添加股票」</td></tr>';
+        applyStats();
+        return;
+      }
 
       tbody.innerHTML = items.map(item => {
         const q = quoteMap[item.symbol];
@@ -4564,6 +4587,7 @@
           removeWatchlist(id);
         }
       };
+      applyStats();
     } catch (e) {
       console.warn('Watchlist load failed:', e.message);
       if (e.message.includes('401') || e.message.includes('未授权')) {

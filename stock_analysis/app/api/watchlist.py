@@ -10,11 +10,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 
 from app.database import get_db
 from app.models import WatchlistGroup, WatchlistItem, User
 from app.api.auth import get_current_user
+from app.cache import get_redis
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -62,6 +63,13 @@ class ExportResponse(BaseModel):
     format: str
     count: int
     data: list
+
+
+class CacheStatsResponse(BaseModel):
+    watched_count: int
+    cached_quotes: int
+    cache_keys: int
+    memory_used: str
 
 
 # -- Routes --
@@ -264,3 +272,37 @@ async def export_watchlist(
     ]
     logger.info(f"Watchlist exported: count={len(data)}")
     return ExportResponse(format="json", count=len(data), data=data)
+
+
+@router.get("/cache-stats", response_model=CacheStatsResponse)
+async def watchlist_cache_stats(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Watchlist + cache statistics (WL-006)."""
+    logger.info(f"Watchlist cache stats: user_id={user.id}")
+    result = await db.execute(
+        select(func.count(WatchlistItem.id)).where(WatchlistItem.user_id == str(user.id))
+    )
+    watched_count = int(result.scalar() or 0)
+
+    cached_quotes = 0
+    cache_keys = 0
+    memory_used = "N/A"
+    try:
+        r = await get_redis()
+        cache_keys = await r.dbsize()
+        n = 0
+        async for _ in r.scan_iter("quote:*", count=500):
+            n += 1
+        cached_quotes = n
+        info = await r.info("memory")
+        memory_used = info.get("used_memory_human") or "N/A"
+    except Exception as exc:
+        logger.warning(f"Cache stats unavailable: {exc}")
+    return CacheStatsResponse(
+        watched_count=watched_count,
+        cached_quotes=cached_quotes,
+        cache_keys=cache_keys,
+        memory_used=memory_used,
+    )
