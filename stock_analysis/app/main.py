@@ -271,7 +271,8 @@ from app.api import (
     data_router, model_router, analysis_router,
     agent_router, watchlist_router, news_router,
     kol_router, auth_router, evaluation_router, backtest_router,
-    capital_router, insight_router, forecast_router,
+    capital_router, insight_router, forecast_router, market_router,
+    roundtable_router,
 )
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
@@ -287,8 +288,10 @@ app.include_router(backtest_router, prefix="/api/v1/backtest", tags=["Backtest"]
 app.include_router(capital_router, prefix="/api/v1/capital", tags=["Capital"])
 app.include_router(insight_router, prefix="/api/v1/insight", tags=["Insight"])
 app.include_router(forecast_router, prefix="/api/v1/forecast", tags=["Forecast"])
+app.include_router(market_router, prefix="/api/v1/market", tags=["Global Markets"])
+app.include_router(roundtable_router, prefix="/api/v1/roundtable", tags=["Trading Roundtable"])
 
 logger.info(
     f"Routers registered: auth, data, models, analysis, agent, "
-    f"watchlist, news, kol, evaluation, backtest, capital, insight"
+    f"watchlist, news, kol, evaluation, backtest, capital, insight, market, roundtable"
 )

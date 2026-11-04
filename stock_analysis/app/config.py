@@ -56,8 +56,11 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = "change-me-32-byte-key-for-aes256!"
 
     # --- AI Model Defaults ---
+    # 官方 v2 文档 https://opencode.ai/v2/docs/console/models：
+    # 直接调 API 时模型 ID 不带 opencode/ 前缀（该前缀只用于 OpenCode 客户端的
+    # opencode.json 配置），且外部调用必须选付费模型或订阅 Go。
     DEFAULT_LLM_PROVIDER: str = "opencodezen"
-    DEFAULT_LLM_MODEL: str = "opencode/gpt-5.5"
+    DEFAULT_LLM_MODEL: str = "glm-5.3-flash"
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     DEEPSEEK_API_KEY: Optional[str] = None
@@ -65,7 +68,11 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_BASE_URL: Optional[str] = None
     OPENCODEZEN_API_KEY: Optional[str] = None
-    OPENCODEZEN_BASE_URL: str = "https://opencode.ai/zen/v1"
+    # Pay-as-you-go: https://opencode.ai/inference/openai/v1
+    # Go 订阅:      https://opencode.ai/inference/go/openai/v1
+    # 模型目录:     https://opencode.ai/inference/v1/models
+    # 详见 https://opencode.ai/v2/docs/console/harnesses#base-urls
+    OPENCODEZEN_BASE_URL: str = "https://opencode.ai/inference/openai/v1"
 
     # --- Tushare ---
     TUSHARE_TOKEN: Optional[str] = None

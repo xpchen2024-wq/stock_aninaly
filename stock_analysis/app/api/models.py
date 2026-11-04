@@ -19,7 +19,7 @@ from app.models import ModelConfig, AgentModelBinding
 from app.model_gateway import (
     ModelGateway, LLMConfig, LLMProvider,
     encrypt_api_key, decrypt_api_key, mask_api_key,
-    get_model_gateway,
+    get_model_gateway, detect_key_mismatch, normalize_opencode_model,
 )
 from app.utils.errors import explain_llm_error_with_hint
 
@@ -67,6 +67,10 @@ class ModelConfigResponse(BaseModel):
     is_default: bool
     is_enabled: bool
     status: str = "active"
+    # Key 与平台不匹配时给出中文警告，界面直接展示（避免用户对着 401 反复改模型名）
+    key_warning: Optional[str] = None
+    # 自定义请求头（OpenCode Go 的 x-opencode-session 等），编辑弹窗需要回显
+    extra_headers: Optional[dict] = None
 
 
 class TestResult(BaseModel):
@@ -99,8 +103,11 @@ async def list_models(
     configs = result.scalars().all()
     responses = []
     for c in configs:
+        key_warning = None
         try:
-            masked = mask_api_key(decrypt_api_key(c.api_key_encrypted, settings.ENCRYPTION_KEY))
+            plain_key = decrypt_api_key(c.api_key_encrypted, settings.ENCRYPTION_KEY)
+            masked = mask_api_key(plain_key)
+            key_warning = detect_key_mismatch(c.platform, plain_key)
         except Exception:
             masked = "****（请重新配置 API Key）"
         responses.append(ModelConfigResponse(
@@ -108,7 +115,8 @@ async def list_models(
             base_url=c.base_url, api_key_masked=masked,
             model_name=c.model_name, max_tokens=c.max_tokens,
             temperature=c.temperature, is_default=c.is_default, is_enabled=c.is_enabled,
-            status=c.status,
+            status=c.status, key_warning=key_warning,
+            extra_headers=c.extra_headers,
         ))
     logger.info(f"Returned {len(responses)} model configs")
     return responses
@@ -118,12 +126,19 @@ async def list_models(
 async def create_model(req: ModelConfigCreate, db: AsyncSession = Depends(get_db)):
     """Create new model configuration (AI-002, AI-004)."""
     logger.info(f"Creating model config: name={req.name}, platform={req.platform}, model={req.model_name}")
+    key_warning = detect_key_mismatch(req.platform, req.api_key)
+    if key_warning:
+        logger.warning(f"Key/platform mismatch on create: name={req.name} → {key_warning}")
     encrypted_key = encrypt_api_key(req.api_key, settings.ENCRYPTION_KEY)
+
+    # 官方 API 只接受不带 opencode/ 前缀的模型 ID，保存前统一规范化
+    model_name = (normalize_opencode_model(req.model_name)
+                  if req.platform == "opencodezen" else req.model_name)
 
     config = ModelConfig(
         id=str(uuid4()), name=req.name, platform=req.platform,
         base_url=req.base_url, api_key_encrypted=encrypted_key,
-        model_name=req.model_name, max_tokens=req.max_tokens,
+        model_name=model_name, max_tokens=req.max_tokens,
         temperature=req.temperature, is_default=req.is_default,
         is_enabled=req.is_enabled, extra_headers=req.extra_headers,
     )
@@ -149,6 +164,8 @@ async def create_model(req: ModelConfigCreate, db: AsyncSession = Depends(get_db
         model_name=config.model_name, max_tokens=config.max_tokens,
         temperature=config.temperature, is_default=config.is_default,
         is_enabled=config.is_enabled,
+        key_warning=detect_key_mismatch(req.platform, req.api_key),
+        extra_headers=config.extra_headers,
     )
 
 
@@ -308,7 +325,10 @@ async def update_model(config_id: str, req: ModelConfigUpdate, db: AsyncSession 
     if req.api_key is not None:
         config.api_key_encrypted = encrypt_api_key(req.api_key, settings.ENCRYPTION_KEY); changes.append("api_key")
     if req.model_name is not None:
-        config.model_name = req.model_name; changes.append("model_name")
+        # 编辑时同样清掉 OpenCode 客户端专用的模型前缀
+        config.model_name = (normalize_opencode_model(req.model_name)
+                             if config.platform == "opencodezen" else req.model_name)
+        changes.append("model_name")
     if req.max_tokens is not None:
         config.max_tokens = req.max_tokens; changes.append("max_tokens")
     if req.temperature is not None:
@@ -331,8 +351,10 @@ async def update_model(config_id: str, req: ModelConfigUpdate, db: AsyncSession 
             get_model_gateway().set_default(str(config.id))
     except Exception as exc:
         logger.warning(f"Failed to sync updated model config to gateway: {exc}")
+    plain_key = ""
     try:
-        masked = mask_api_key(decrypt_api_key(config.api_key_encrypted, settings.ENCRYPTION_KEY))
+        plain_key = decrypt_api_key(config.api_key_encrypted, settings.ENCRYPTION_KEY)
+        masked = mask_api_key(plain_key)
     except Exception:
         masked = "****"
     return ModelConfigResponse(
@@ -342,6 +364,8 @@ async def update_model(config_id: str, req: ModelConfigUpdate, db: AsyncSession 
         model_name=config.model_name, max_tokens=config.max_tokens,
         temperature=config.temperature, is_default=config.is_default,
         is_enabled=config.is_enabled,
+        key_warning=detect_key_mismatch(config.platform, plain_key),
+        extra_headers=config.extra_headers,
     )
 
 
@@ -380,6 +404,7 @@ async def restore_model(config_id: str, db: AsyncSession = Depends(get_db)):
             model_name=config.model_name, max_tokens=config.max_tokens,
             temperature=config.temperature, is_default=config.is_default,
             is_enabled=config.is_enabled, status=config.status,
+            extra_headers=config.extra_headers,
         )
     config.status = "active"
     await db.flush()
@@ -400,6 +425,7 @@ async def restore_model(config_id: str, db: AsyncSession = Depends(get_db)):
         model_name=config.model_name, max_tokens=config.max_tokens,
         temperature=config.temperature, is_default=config.is_default,
         is_enabled=config.is_enabled, status=config.status,
+        extra_headers=config.extra_headers,
     )
 
 
@@ -419,6 +445,18 @@ async def test_model(config_id: str, db: AsyncSession = Depends(get_db)):
     except Exception:
         api_key = ""
 
+    # Key 与平台不匹配时直接给出结论，不再发一次注定失败的请求。
+    # 典型场景：把 OpenRouter 的 sk-or-v1-… 填进 OpenCode Zen 配置，
+    # 上游只会回 401 Invalid credential，用户会误以为是模型名写错。
+    mismatch = detect_key_mismatch(config.platform, api_key)
+    if mismatch:
+        logger.warning(f"Model test blocked by key/platform mismatch: config_id={config_id} → {mismatch}")
+        return TestResult(
+            success=False, latency_ms=0.0, model=config.model_name,
+            error=mismatch,
+            hint="到该平台控制台重新生成 Key 并填写到对应配置；不同平台的 Key 不能混用",
+        )
+
     # 用 probe 而不是 test_connection：不写入网关、忽略停用标记，
     # 这样已停用/已失效的配置也能测出真实原因（例如 API Key 过期）
     test = await gateway.probe(LLMConfig(
@@ -429,6 +467,8 @@ async def test_model(config_id: str, db: AsyncSession = Depends(get_db)):
         model_name=config.model_name,
         max_tokens=config.max_tokens, temperature=config.temperature,
         is_enabled=config.is_enabled,
+        # Go 订阅需要 x-opencode-session 等自定义头，测试连接时也必须带上
+        extra_headers=dict(config.extra_headers or {}),
     ))
     logger.info(
         f"Model test result: config_id={config_id}, success={test.get('success')}, "
@@ -474,16 +514,33 @@ async def fetch_available_models(req: AvailableModelsRequest, db: AsyncSession =
     Falls back to known model lists when the provider does not respond.
     """
     logger.info(f"Fetching available models: platform={req.platform}, base_url={req.base_url}, config_id={req.config_id}")
-    # --- Determine base URL ---
+    # --- Determine base URL（优先级：请求传入 > 已存配置 > 平台默认）---
+    platform_defaults = {
+        "openai": "https://api.openai.com/v1",
+        "deepseek": "https://api.deepseek.com/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+        "opencodezen": "https://opencode.ai/inference/openai/v1",
+    }
     base_url = (req.base_url or "").rstrip("/")
+    api_key = (req.api_key or "").strip()
+
+    # 编辑模式刷新时前端可能不传 base_url / key，应优先复用已存配置。
+    # 旧实现先把平台默认值填进 base_url，使 stored.base_url 分支永远不执行，
+    # 结果 Go 订阅配置会被拉到 pay-as-you-go 的模型目录（70 个 vs 26 个）。
+    if req.config_id and db is not None:
+        stored = (await db.execute(
+            select(ModelConfig).where(ModelConfig.id == req.config_id)
+        )).scalar_one_or_none()
+        if stored and stored.platform == req.platform:
+            if not base_url and stored.base_url:
+                base_url = stored.base_url.rstrip("/")
+            if not api_key:
+                try:
+                    api_key = decrypt_api_key(stored.api_key_encrypted, settings.ENCRYPTION_KEY)
+                except Exception as exc:
+                    logger.warning(f"Failed to decrypt stored API key for available models: {exc}")
+
     if not base_url:
-        # Use well-known defaults
-        platform_defaults = {
-            "openai": "https://api.openai.com/v1",
-            "deepseek": "https://api.deepseek.com/v1",
-            "openrouter": "https://openrouter.ai/api/v1",
-            "opencodezen": "https://opencode.ai/inference/openai/v1",
-        }
         base_url = platform_defaults.get(req.platform, "")
 
     # --- Built-in fallback models (always available) ---
@@ -499,41 +556,45 @@ async def fetch_available_models(req: AvailableModelsRequest, db: AsyncSession =
             "anthropic/claude-sonnet-4", "google/gemini-2.5-pro",
             "deepseek/deepseek-chat",
         ],
+        # 官方 v2 文档：免费档（-free / big-pickle）只允许在 OpenCode 客户端内
+        # 使用，其他客户端即使带有效 Key 也会收到 403。外部集成的下拉列表里
+        # 只给付费模型，避免用户选完才发现调用必然失败。
+        # 下列 ID 均取自 https://opencode.ai/inference/v1/models（2026-11 核对）。
         "opencodezen": [
-            "deepseek-v4.1-flash-free", "glm-5.3-flash-free",
-            "nemotron-3.5-lightning-free", "mimo-v2.6-flash-free",
-            "big-pickle", "deepseek-v4.1-flash", "glm-5.3",
-            "gpt-5.5", "claude-sonnet-4.5", "gemini-3.1-pro",
+            "glm-5.3-flash", "glm-5.3", "glm-5.2",
+            "deepseek-v4.1-flash", "deepseek-v4-pro",
+            "minimax-m3", "kimi-k3", "kimi-k2.7-code",
+            "qwen3.8-flash", "gpt-5.5",
         ],
     }
 
-    api_key = (req.api_key or "").strip()
+    # 平台配额/策略说明：随模型列表一起返回，界面直接展示，省得用户反复试错
+    platform_notes = {
+        "opencodezen": ("官方策略：免费档（-free、big-pickle）仅限 OpenCode 客户端内使用，"
+                        "外部 API 调用一律返回 403。外部集成请选付费模型"
+                        "（Console workspace 需有 credits）或订阅 OpenCode Go；"
+                        "Key 在 opencode.ai/console → Personal API keys 生成，形如 oc_sk_…"),
+        "openrouter": ("免费 :free 模型按账户共享 50 次/天，UTC 00:00（北京时间 08:00）重置；"
+                       "账户充值满 10 美元可解锁 1000 次/天"),
+    }
+    note = platform_notes.get(req.platform)
 
-    # --- Reuse the stored key for edit-mode refreshes (permission-safe) ---
-    if req.config_id:
-        stored = (await db.execute(
-            select(ModelConfig).where(ModelConfig.id == req.config_id)
-        )).scalar_one_or_none()
-        if stored and stored.platform == req.platform:
-            if not base_url and stored.base_url:
-                base_url = stored.base_url.rstrip("/")
-            if not api_key:
-                try:
-                    api_key = decrypt_api_key(stored.api_key_encrypted, settings.ENCRYPTION_KEY)
-                except Exception as exc:
-                    logger.warning(f"Failed to decrypt stored API key for available models: {exc}")
 
     # --- Try live fetch from provider ---
+    blocked_models: List[str] = []
     try:
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        models_url = (
-            "https://opencode.ai/inference/v1/models"
-            if req.platform == "opencodezen"
-            else f"{base_url}/models"
-        )
+        # OpenCode Console 的模型目录在 /inference/v1/models（Go 订阅为
+        # /inference/go/v1/models）；OpenAI 兼容路径下的 /models 是 404。
+        if req.platform == "opencodezen":
+            is_go = "/inference/go" in base_url
+            models_url = ("https://opencode.ai/inference/go/v1/models" if is_go
+                          else "https://opencode.ai/inference/v1/models")
+        else:
+            models_url = f"{base_url}/models"
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
             resp = await client.get(models_url, headers=headers)
@@ -544,23 +605,36 @@ async def fetch_available_models(req: AvailableModelsRequest, db: AsyncSession =
                 model_ids = []
                 for item in items:
                     mid = item.get("id", "")
-                    if mid and not any(
+                    if not mid or any(
                         skip in mid.lower()
                         for skip in [
                             "whisper", "tts", "dall-e", "embedding", "moderation",
                             "babbage", "davinci", "audio", "image",
                         ]
                     ):
-                        model_ids.append(mid)
+                        continue
+                    # 官方目录带 type 字段（chat / embedding / rerank…）；
+                    # 关键字过滤只能挡住已见过的命名，按 type 判断才不漏。
+                    if str(item.get("type") or "chat").lower() != "chat":
+                        continue
+                    # 免费档禁止外部调用（官方返回 403），单独返回供界面标注
+                    if (req.platform == "opencodezen"
+                            and (mid.endswith("-free") or mid == "big-pickle")):
+                        blocked_models.append(mid)
+                        continue
+                    model_ids.append(mid)
 
                 if model_ids:
                     logger.info(
-                        f"Available models (live): platform={req.platform}, count={len(model_ids)}"
+                        f"Available models (live): platform={req.platform}, "
+                        f"count={len(model_ids)}, blocked={len(blocked_models)}"
                     )
                     return {
                         "platform": req.platform,
                         "source": "live",
                         "models": model_ids,
+                        "blocked_models": blocked_models,
+                        "note": note,
                     }
 
     except Exception as e:
@@ -575,4 +649,6 @@ async def fetch_available_models(req: AvailableModelsRequest, db: AsyncSession =
         "platform": req.platform,
         "source": "builtin",
         "models": models,
+        "blocked_models": blocked_models,
+        "note": note,
     }

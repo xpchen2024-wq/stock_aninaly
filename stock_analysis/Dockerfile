@@ -3,16 +3,21 @@
 # ============================================================================
 FROM python:3.11-slim
 
-# System dependencies for TA-Lib
+# System dependencies for building TA-Lib from source.
+# libta-lib0 is no longer available in Debian trixie, so we build TA-Lib from
+# source. We also need `automake` because on aarch64 (Apple Silicon / OrbStack)
+# the config.guess/config.sub bundled with TA-Lib 0.4.0 (2006) cannot detect
+# the architecture and ./configure fails with "cannot guess build type".
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ make wget unzip \
-    libta-lib0 \
+    gcc g++ make wget unzip automake \
     && rm -rf /var/lib/apt/lists/*
 
-# Install TA-Lib C library
+# Install TA-Lib C library from source (works on x86_64 and aarch64)
 RUN wget -q http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
     && tar -xzf ta-lib-0.4.0-src.tar.gz \
     && cd ta-lib \
+    && cp /usr/share/automake-*/config.guess . \
+    && cp /usr/share/automake-*/config.sub . \
     && ./configure --prefix=/usr \
     && make \
     && make install \

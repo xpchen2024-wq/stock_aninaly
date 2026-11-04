@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Optional, List
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func
 
 from app.database import get_db
-from app.models import WatchlistGroup, WatchlistItem, User
+from app.models import WatchlistGroup, WatchlistItem, User, NewsArticle, now_utc
 from app.api.auth import get_current_user
 from app.cache import get_redis
 
@@ -70,6 +71,19 @@ class CacheStatsResponse(BaseModel):
     cached_quotes: int
     cache_keys: int
     memory_used: str
+
+
+class WatchlistNewsItem(BaseModel):
+    id: str
+    source: str
+    title: str
+    summary: Optional[str]
+    url: Optional[str]
+    published_at: str
+    related_stocks: Optional[list]
+    topic_tags: Optional[list]
+    sentiment: Optional[str]
+    heat_score: Optional[float]
 
 
 # -- Routes --
@@ -306,3 +320,67 @@ async def watchlist_cache_stats(
         cache_keys=cache_keys,
         memory_used=memory_used,
     )
+
+
+def _news_symbols(related_stocks) -> List[str]:
+    out = []
+    try:
+        for item in related_stocks or []:
+            if isinstance(item, dict) and item.get("symbol"):
+                out.append(str(item["symbol"]).upper())
+            elif isinstance(item, str):
+                out.append(item.upper())
+    except Exception:
+        pass
+    return out
+
+
+@router.get("/news", response_model=List[WatchlistNewsItem])
+async def watchlist_news(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Related news for watchlist stocks (WL-007).
+    Returns up to 50 articles whose related_stocks contain a followed symbol,
+    sorted by published_at descending.
+    """
+    logger.info(f"Watchlist related news: user_id={user.id}")
+    result = await db.execute(
+        select(WatchlistItem.symbol).where(WatchlistItem.user_id == str(user.id))
+    )
+    watched_symbols = {str(s).upper() for s in result.scalars().all() if s}
+
+    cutoff = now_utc() - timedelta(hours=72)
+    q = (
+        select(NewsArticle)
+        .where(NewsArticle.published_at >= cutoff, NewsArticle.is_archived == False)
+        .order_by(NewsArticle.published_at.desc())
+    )
+    rows = (await db.execute(q)).scalars().all()
+
+    related: List[WatchlistNewsItem] = []
+    general: List[WatchlistNewsItem] = []
+    for a in rows:
+        item = WatchlistNewsItem(
+            id=str(a.id), source=a.source, title=a.title,
+            summary=a.summary, url=a.url,
+            published_at=a.published_at.isoformat() if a.published_at else "",
+            related_stocks=a.related_stocks, topic_tags=a.topic_tags,
+            sentiment=a.sentiment, heat_score=a.heat_score,
+        )
+        syms = {s.upper() for s in _news_symbols(a.related_stocks)}
+        if watched_symbols and (syms & watched_symbols):
+            related.append(item)
+        else:
+            general.append(item)
+
+    # 关注股票相关新闻优先，不足 50 条时用最新多源通用新闻补齐
+    # （来源：同花顺 / 东方财富 / 财联社 / 新浪财经 等，均已在入库时聚合去重）
+    articles: List[WatchlistNewsItem] = related[:50]
+    if len(articles) < 50:
+        articles.extend(general[: 50 - len(articles)])
+    logger.info(
+        f"Watchlist news: related={len(related)} general={len(general)} "
+        f"returned={len(articles)}"
+    )
+    return articles

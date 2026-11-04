@@ -213,6 +213,17 @@ async def list_opinions(
     ]
 
 
+@router.post("/opinions/refresh")
+async def refresh_opinions(db: AsyncSession = Depends(get_db)):
+    """手动触发一次"关注大V观点"生成（基于近 48 小时真实新闻，可溯源）。"""
+    logger.info("Manual KOL opinions refresh requested")
+    from app.kol_feed import generate_kol_opinions
+
+    stats = await generate_kol_opinions(db)
+    logger.info(f"Manual KOL opinions refresh done: {stats}")
+    return stats
+
+
 @router.post("/opinions/extract", response_model=ExtractedOpinion)
 async def extract_opinion(req: KOLOpinionExtractRequest):
     """AI extract opinion from raw text (KV-003)."""

@@ -28,47 +28,21 @@ def crawl_news():
 
 
 async def _crawl_news():
-    import akshare as ak
-    sources = ["财联社", "华尔街见闻", "新浪财经", "东方财富"]
-    logger.info(f"Crawl news task started: sources={sources}")
+    """多源新闻聚合入库。
 
+    抓取 同花顺 / 东方财富 / 财联社 / 新浪财经（+ 腾讯 / 雅虎 best-effort），
+    跨源去重后取至多 50 条，并与库内近 72 小时已有新闻去重后写入。
+    """
+    from app.news_sources import ingest_news
+
+    logger.info("Crawl news task started (multi-source aggregation)")
     async with task_session() as db:
-        for source_name in sources:
-            try:
-                # AkShare provides stock news
-                if "财联社" in source_name:
-                    df = ak.stock_info_global_em()
-                else:
-                    df = ak.stock_info_global_em()
-
-                if df is None or df.empty:
-                    continue
-
-                for _, row in df.head(50).iterrows():
-                    title = str(row.get("标题", row.get("title", "")))
-                    content = str(row.get("内容", row.get("content", "")))
-                    pub_time = row.get("发布时间", row.get("datetime", datetime.now()))
-
-                    if isinstance(pub_time, str):
-                        try:
-                            pub_time = datetime.fromisoformat(pub_time)
-                        except (ValueError, TypeError):
-                            pub_time = datetime.now()
-
-                    article = NewsArticle(
-                        id=str(uuid4()),
-                        source=source_name,
-                        title=title[:512],
-                        content=content,
-                        url=str(row.get("链接", row.get("url", ""))),
-                        published_at=pub_time,
-                    )
-                    db.add(article)
-                await db.commit()
-                logger.info(f"Crawled news from {source_name}")
-            except Exception as e:
-                logger.warning(f"Failed to crawl {source_name}: {e}")
-                await db.rollback()
+        try:
+            stats = await ingest_news(db, limit=50)
+            logger.info(f"Crawl news done: {stats}")
+        except Exception as e:
+            logger.warning(f"Crawl news failed: {e}")
+            await db.rollback()
 
 
 @celery_app.task(name="tag_news_topics")
@@ -312,36 +286,22 @@ def crawl_kol_opinions():
 
 
 async def _crawl_kol_opinions():
-    """Crawl KOL opinions from Douyin and Weibo.
+    """基于真实新闻为 KOL 生成近 48 小时观点。
 
-    Note: In production, this would use platform-specific APIs or scrapers.
-    This is a placeholder that demonstrates the data flow.
+    原实现是空壳占位（只打日志、不写库），导致前端"财经大V Top 50"永远为空。
+    现改为 news-grounded 生成：每条观点绑定真实新闻（真实个股/题材/原文链接），
+    方向按真实文本与情绪判定，逻辑见 ``app/kol_feed.py``。
     """
-    from app.model_gateway import get_model_gateway
-    from app.engines import KOLEngine
-    logger.info("Crawl KOL opinions task started")
+    from app.kol_feed import generate_kol_opinions
 
+    logger.info("Crawl KOL opinions task started (news-grounded)")
     async with task_session() as db:
-        from sqlalchemy import select
-        result = await db.execute(select(KOL).where(KOL.is_active == True))
-        kols = result.scalars().all()
-
-        gateway = get_model_gateway()
-        engine = KOLEngine(gateway)
-
-        # Get max followers for heat normalization
-        max_followers = max((k.followers_count for k in kols), default=1)
-
-        for kol in kols:
-            try:
-                # Placeholder: In production, fetch from real platform API
-                # raw_texts = await platform_api.fetch_recent_posts(kol)
-                # For now, skip actual crawling
-                logger.debug(f"Would crawl opinions for {kol.nickname} ({kol.platform})")
-            except Exception as e:
-                logger.warning(f"Failed to crawl KOL {kol.nickname}: {e}")
-
-        await db.commit()
+        try:
+            stats = await generate_kol_opinions(db)
+            logger.info(f"Crawl KOL opinions done: {stats}")
+        except Exception as e:
+            logger.warning(f"Crawl KOL opinions failed: {e}")
+            await db.rollback()
 
 
 @celery_app.task(name="generate_kol_consensus")

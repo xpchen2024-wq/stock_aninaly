@@ -84,6 +84,43 @@ async def list_news(
     ]
 
 
+@router.post("/refresh")
+async def refresh_news(
+    limit: int = Query(50, ge=1, le=100, description="本次最多抓取入库条数"),
+    db: AsyncSession = Depends(get_db),
+):
+    """手动触发一次多源新闻抓取入库。
+
+    来源：同花顺 / 东方财富 / 财联社 / 新浪财经（+ 腾讯 / 雅虎 best-effort）。
+    跨源去重后最多 ``limit`` 条（默认 50），并与库内近 72 小时已有新闻去重。
+    """
+    logger.info(f"Manual news refresh requested: limit={limit}")
+    from app.news_sources import ingest_news
+
+    stats = await ingest_news(db, limit=limit)
+    logger.info(f"Manual news refresh done: {stats}")
+    return stats
+
+
+@router.get("/sources")
+async def news_sources(db: AsyncSession = Depends(get_db)):
+    """返回已配置的新闻来源及近 72 小时入库量，便于前端展示数据来源。"""
+    cutoff = now_utc() - timedelta(hours=72)
+    result = await db.execute(
+        select(NewsArticle.source, func.count(NewsArticle.id))
+        .where(NewsArticle.published_at >= cutoff, NewsArticle.is_archived == False)
+        .group_by(NewsArticle.source)
+    )
+    counts = {row[0]: row[1] for row in result}
+    configured = ["东方财富", "同花顺", "财联社", "新浪财经", "腾讯财经", "雅虎财经"]
+    return {
+        "configured": configured,
+        "available": [
+            {"source": s, "count_72h": counts.get(s, 0)} for s in configured
+        ],
+    }
+
+
 @router.get("/hot-topics", response_model=List[HotTopicResponse])
 async def list_hot_topics(
     limit: int = Query(10, le=50),

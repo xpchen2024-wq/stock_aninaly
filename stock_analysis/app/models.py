@@ -429,6 +429,74 @@ class DecisionEvaluation(Base):
     )
 
 
+# -- Trading Roundtable (TradingAgents-style) ---------------------------------
+class RoundtableRun(Base):
+    """投研圆桌的一次完整运行（图状态 + 辩论实录 + 终审决策）。
+
+    设计对齐 TradingAgents 的图状态：分析师报告 → 多空辩论 → 研究经理裁决
+    → 交易计划 → 三方风控辩论 → 组合经理终审 → 记忆反思。
+    ``state`` 保存 LangGraph 式的可恢复状态，``transcript`` 保存逐条发言，
+    前端据此回放整场圆桌。
+    """
+    __tablename__ = "roundtable_runs"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    session_id = Column(String(64), nullable=False, unique=True, index=True)
+    symbol = Column(String(32), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    trade_date = Column(Date, nullable=True, index=True)
+
+    status = Column(String(24), default="running", nullable=False)  # running/completed/failed
+    config = Column(JSON, nullable=True)          # 辩论轮次 / 模型档位 / 持仓期
+    snapshot = Column(JSON, nullable=True)        # 事实锚：行情/指标/基本面/概率
+    analyst_reports = Column(JSON, nullable=True)
+    research_debate = Column(JSON, nullable=True) # 多空史 + 裁决
+    trader_plan = Column(Text, nullable=True)
+    risk_debate = Column(JSON, nullable=True)     # 三方史 + 裁决
+    decision = Column(JSON, nullable=True)        # 终审：action/目标价/止损/仓位/理由
+    signal = Column(String(16), nullable=True)    # buy/hold/sell
+    confidence = Column(Float, nullable=True)
+    transcript = Column(JSON, nullable=True)
+    state = Column(JSON, nullable=True)
+    errors = Column(JSON, nullable=True)
+    elapsed_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class RoundtableMemory(Base):
+    """决策记忆日志：运行结束后落一条，持有期到点后结算真实收益与反思。
+
+    下一次分析会把「同标的最近决策 + 其他标的近期教训」注入组合经理提示词，
+    对应 TradingAgents 的 memory log + reflection 闭环。
+    """
+    __tablename__ = "roundtable_memories"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=new_uuid)
+    session_id = Column(String(64), nullable=False, index=True)
+    symbol = Column(String(32), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    trade_date = Column(Date, nullable=False, index=True)
+    signal = Column(String(16), nullable=False)          # buy/hold/sell
+    confidence = Column(Float, nullable=True)
+    entry_price = Column(Float, nullable=True)
+    horizon_days = Column(Integer, default=10, nullable=False)
+    target_date = Column(Date, nullable=True)
+
+    realized_return_pct = Column(Float, nullable=True)
+    benchmark = Column(String(32), nullable=True)
+    benchmark_return_pct = Column(Float, nullable=True)
+    alpha_pct = Column(Float, nullable=True)
+    reflection = Column(Text, nullable=True)
+    settled = Column(Boolean, default=False, nullable=False, index=True)
+    settled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_roundtable_memory_session"),
+    )
+
+
 # -- Strategy Backtest Records -------------------------------------------------
 class BacktestRecord(Base):
     """Persisted backtest runs so 历史回测 can list and compare results."""

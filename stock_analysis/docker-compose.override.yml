@@ -1,0 +1,21 @@
+# Auto-loaded by `docker compose` (no -f flag needed).
+#
+# WHY THIS FILE EXISTS:
+# The static frontend lives one level ABOVE the project directory at
+# /Users/cxp/myAIcoding/UI_design. That path is outside the Docker build
+# context (the project dir), so `COPY . .` never puts it into the image,
+# and app/main.py (which resolves it as <repo-root>/UI_design, i.e. "/UI_design"
+# inside the container) ends up with a missing directory -> /ui 404.
+#
+# Mounting the host UI_design into /UI_design fixes the 404 and lets edits to
+# index.html show up immediately without rebuilding the image.
+services:
+  api:
+    volumes:
+      - ../UI_design:/UI_design:ro
+  celery_worker:
+    volumes:
+      - ../UI_design:/UI_design:ro
+  celery_beat:
+    volumes:
+      - ../UI_design:/UI_design:ro

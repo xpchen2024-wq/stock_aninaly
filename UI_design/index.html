@@ -94,7 +94,7 @@
   /* ===== Main Content ===== */
   .main {
     margin-left: var(--sidebar-width);
-    flex: 1; min-height: 100vh;
+    flex: 1; min-width: 0; min-height: 100vh;
     display: flex; flex-direction: column;
   }
 
@@ -130,7 +130,7 @@
 
   /* Page Content */
   .page-content {
-    flex: 1; padding: 24px; overflow-y: auto;
+    flex: 1; min-width: 0; padding: 24px; overflow-y: auto; overflow-x: hidden;
   }
 
   /* ===== Card ===== */
@@ -458,6 +458,29 @@
   }
   .model-test-line.ok { background: rgba(46,204,113,.12); color: #2ecc71; border-left: 3px solid #2ecc71; }
   .model-test-line.bad { background: rgba(231,76,60,.12); color: #e74c3c; border-left: 3px solid #e74c3c; }
+  .model-test-line details { margin-top: 5px; }
+  .model-test-line details summary {
+    cursor: pointer; font-size: 11px; opacity: .75; user-select: none;
+  }
+  .model-test-line details pre {
+    margin: 5px 0 0; padding: 6px 8px; border-radius: 4px;
+    background: rgba(0,0,0,.18); font-size: 10.5px; line-height: 1.45;
+    white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto;
+    color: var(--text-secondary); font-family: var(--font-mono, monospace);
+  }
+  /* Key 归属与平台不一致：比测试失败更早暴露，避免反复试错 */
+  .model-key-warn {
+    margin-top: 6px; padding: 5px 9px; border-radius: 6px;
+    font-size: 12px; line-height: 1.5; max-width: 640px;
+    background: rgba(255,165,2,.12); color: var(--accent-yellow);
+    border-left: 3px solid var(--accent-yellow);
+  }
+  .platform-help {
+    margin-top: 6px; padding: 7px 10px; border-radius: 6px;
+    font-size: 11.5px; line-height: 1.55;
+    background: var(--bg-primary); color: var(--text-muted);
+    border-left: 2px solid var(--border);
+  }
 
   /* ===== Report List ===== */
   .report-item {
@@ -556,6 +579,22 @@
   }
   .stock-suggest-hint { padding: 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
 
+  /* 投研圆桌：联想面板与输入框左对齐，条目改单行紧凑，限制高度避免长条溢出 */
+  #page-roundtable .stock-suggest {
+    left: 0; right: auto; width: 100%; min-width: 230px;
+    max-height: 238px; padding: 2px 0;
+  }
+  #page-roundtable .stock-suggest-item { padding: 7px 10px; gap: 8px; overflow: hidden; }
+  #page-roundtable .stock-suggest-item > div {
+    display: flex; align-items: baseline; gap: 8px;
+    flex: 1 1 auto; min-width: 0;
+  }
+  #page-roundtable .stock-suggest-item .s-name {
+    font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #page-roundtable .stock-suggest-item .s-code { margin-top: 0; font-size: 10.5px; flex-shrink: 0; }
+  #page-roundtable .stock-suggest-item .s-market { font-size: 9.5px; padding: 1px 5px; }
+
   /* ===== Tabs ===== */
   .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
   .tab {
@@ -600,9 +639,128 @@
   .text-right { text-align: right; }
   .mono { font-family: 'SF Mono', 'Fira Code', monospace; }
 
+  /* ===== 全球市场速览条（Dashboard 顶部单行） ===== */
+  .gm-strip {
+    display: flex; align-items: center; gap: 10px;
+    height: 27px; padding: 0 10px; margin-bottom: 12px;
+    max-width: 100%; box-sizing: border-box;
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 11px; line-height: 1; color: var(--text-secondary);
+    overflow: hidden;
+  }
+  .gm-strip .gm-lead {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
+    font-size: 10px; color: var(--text-muted); letter-spacing: .2px;
+  }
+  .gm-strip .gm-track {
+    flex: 1 1 auto; display: flex; align-items: center; gap: 12px;
+    min-width: 0; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; -ms-overflow-style: none;
+    white-space: nowrap;
+  }
+  .gm-strip .gm-track::-webkit-scrollbar { display: none; }
+  /* 内容超出时才加右侧渐隐，避免生硬截断 */
+  .gm-strip.gm-overflow .gm-track {
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+  }
+  .gm-strip .gm-item { display: inline-flex; align-items: baseline; gap: 4px; flex: 0 0 auto; }
+  .gm-strip .gm-name { color: var(--text-muted); font-size: 10.5px; }
+  .gm-strip .gm-val { font-size: 10.5px; }
+  .gm-strip .gm-chg { font-size: 10.5px; font-weight: 600; }
+  .gm-strip .gm-chg.up { color: var(--accent-green); }
+  .gm-strip .gm-chg.down { color: var(--accent-red); }
+  .gm-strip .gm-chg.flat { color: var(--text-muted); }
+  .gm-strip .gm-sep { flex: 0 0 auto; height: 11px; width: 1px; background: var(--border); }
+  .gm-strip .gm-group {
+    flex: 0 0 auto; font-size: 10px; font-weight: 600; color: var(--accent-cyan);
+    opacity: .85; letter-spacing: .2px;
+  }
+  .gm-strip .gm-state { flex: 0 0 auto; font-size: 10px; color: var(--text-muted); }
+  .gm-strip #gmUpdated { padding-left: 9px; border-left: 1px solid var(--border); }
+  @media (max-width: 720px) {
+    .gm-strip .gm-lead span.gm-lead-text { display: none; }
+  }
+
   /* Page switch */
   .page { display: none; }
   .page.active { display: block; }
+  /* ===== Trading Roundtable (投研圆桌) ===== */
+  .rt-select {
+    background: var(--bg-card); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 7px 10px; font-size: 12.5px; cursor: pointer; outline: none;
+  }
+  .rt-select:hover { border-color: var(--accent-blue); }
+  .rt-stages { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .rt-stage {
+    flex: 1 1 120px; padding: 8px 10px; border-radius: var(--radius-sm);
+    background: var(--bg-primary); border: 1px solid var(--border);
+    font-size: 12px; color: var(--text-muted); transition: all .2s;
+  }
+  .rt-stage.running { border-color: var(--accent-blue); color: var(--accent-blue); background: rgba(79,140,255,.08); }
+  .rt-stage.done { border-color: rgba(52,199,89,.35); color: var(--accent-green); }
+  .rt-progress { height: 4px; background: var(--bg-hover); border-radius: 2px; overflow: hidden; }
+  .rt-progress > i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    transition: width .45s ease;
+  }
+  .rt-feed {
+    max-height: 620px; overflow-y: auto; display: flex; flex-direction: column;
+    gap: 12px; padding-right: 4px;
+  }
+  .rt-msg { display: flex; gap: 10px; }
+  .rt-msg .avatar {
+    width: 30px; height: 30px; border-radius: 8px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-hover); font-size: 15px;
+  }
+  .rt-msg .body {
+    flex: 1; min-width: 0; background: var(--bg-primary);
+    border: 1px solid var(--border); border-left: 3px solid var(--border);
+    border-radius: var(--radius-sm); padding: 10px 12px;
+  }
+  .rt-msg .who {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .rt-msg .who b { color: var(--text-primary); font-size: 12.5px; }
+  .rt-msg .text { font-size: 13px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); }
+  .rt-msg .text b { color: var(--text-primary); }
+  .rt-msg.bull .body { border-left-color: var(--accent-green); }
+  .rt-msg.bear .body { border-left-color: var(--accent-red); }
+  .rt-msg.analyst .body { border-left-color: var(--accent-blue); }
+  .rt-msg.judge .body { border-left-color: var(--accent-purple); }
+  .rt-msg.manager .body { border-left-color: var(--accent-purple); box-shadow: 0 0 0 1px rgba(168,85,247,.25) inset; }
+  .rt-msg.trader .body { border-left-color: var(--accent-cyan); }
+  .rt-msg.aggressive .body { border-left-color: var(--accent-yellow); }
+  .rt-msg.conservative .body { border-left-color: #7c8aa3; }
+  .rt-msg.neutral .body { border-left-color: var(--accent-cyan); }
+  .rt-msg.reflector .body { border-left-color: var(--accent-green); }
+  .rt-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 1180px) { .rt-grid2 { grid-template-columns: 1fr; } }
+  .rt-report { background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .rt-report > summary {
+    cursor: pointer; padding: 10px 12px; font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px; list-style: none;
+  }
+  .rt-report > summary::-webkit-details-marker { display: none; }
+  .rt-report > summary:hover { color: var(--accent-blue); }
+  .rt-report-body {
+    padding: 0 12px 12px; font-size: 12.5px; line-height: 1.75;
+    color: var(--text-secondary); white-space: pre-wrap; max-height: 300px; overflow: auto;
+  }
+  .rt-kv { display: flex; gap: 22px; flex-wrap: wrap; font-size: 13px; color: var(--text-secondary); }
+  .rt-kv .k { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 2px; }
+  .rt-kv .v { font-weight: 600; color: var(--text-primary); font-size: 14px; }
+  .rt-empty { text-align: center; color: var(--text-muted); font-size: 13px; padding: 36px 0; }
+  .rt-mini { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--bg-hover); color: var(--text-secondary); }
+  .rt-conf { display: block; height: 6px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .rt-conf > i { display: block; height: 100%; background: var(--accent-blue); }
+  .rt-hist-row { cursor: pointer; }
+  .rt-hist-row:hover { background: var(--bg-hover); }
 </style>
 <script src="/ui/lib/echarts.min.js"></script>
 </head>
@@ -637,6 +795,10 @@
       <a class="nav-item" data-page="trend-analysis">
         <span class="nav-icon">📊</span> 个股研判
         <span class="badge">AI</span>
+      </a>
+      <a class="nav-item" data-page="roundtable">
+        <span class="nav-icon">🏛️</span> 投研圆桌
+        <span class="badge">TA</span>
       </a>
       <a class="nav-item" data-page="insight">
         <span class="nav-icon">🩺</span> 投资体检
@@ -711,6 +873,15 @@
 
     <!-- ==================== PAGE: Dashboard ==================== -->
     <div class="page active" id="page-dashboard">
+      <!-- 全球市场速览：美股 / 韩国科技股（单行小字，60s 刷新） -->
+      <div class="gm-strip" id="globalMarketsStrip" title="美股 / 韩国科技股最新涨跌（Yahoo Finance，非交易时段为最近收盘价）">
+        <div class="gm-lead">🌐 <span class="gm-lead-text">全球</span></div>
+        <div class="gm-track" id="gmTrack">
+          <span class="gm-state">加载中…</span>
+        </div>
+        <span class="gm-state" id="gmUpdated">--:--</span>
+      </div>
+
       <!-- 市场环境（沪深300 状态 + 全市场涨跌家数） -->
       <div class="card mb-20" id="mktRegimeCard" style="display:none;">
         <div class="flex-between" style="gap:20px; flex-wrap:wrap; align-items:center;">
@@ -1247,6 +1418,139 @@
       </div>
     </div>
 
+    <!-- ==================== PAGE: Trading Roundtable ==================== -->
+    <div class="page" id="page-roundtable">
+      <div class="flex-between mb-20" style="align-items:flex-start; gap:16px; flex-wrap:wrap;">
+        <div>
+          <div style="font-size:16px; font-weight:600;">🏛️ 投研圆桌 · TradingAgents</div>
+          <div class="text-muted">4 分析师 → 多空 N 轮辩论 → 研究经理裁决 → 交易计划 → 三方风控辩论 → 组合经理终审 → 记忆反思</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <div class="search-box stock-suggest-wrap" style="width:240px;">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="rtStockInput" placeholder="代码或名称，如 贵州茅台" autocomplete="off">
+            <div class="stock-suggest" id="rtStockSuggest"></div>
+          </div>
+          <select class="rt-select" id="rtDebateRounds" title="多空辩论轮数（每轮多空各发言一次）">
+            <option value="1">辩论 1 轮</option>
+            <option value="2" selected>辩论 2 轮</option>
+            <option value="3">辩论 3 轮</option>
+          </select>
+          <select class="rt-select" id="rtRiskRounds" title="三方风控各自发言轮数">
+            <option value="1" selected>风控 1 轮</option>
+            <option value="2">风控 2 轮</option>
+          </select>
+          <select class="rt-select" id="rtHorizon" title="决策记忆的持有期（交易日）">
+            <option value="5">持有 5 日</option>
+            <option value="10" selected>持有 10 日</option>
+            <option value="20">持有 20 日</option>
+          </select>
+          <button class="btn btn-secondary" id="btnRtHistory">📋 历史圆桌</button>
+          <button class="btn btn-primary" id="btnRtRun">🚀 召开圆桌</button>
+        </div>
+      </div>
+
+      <!-- 模型档位 / 记忆概览 -->
+      <div class="card mb-20" id="rtMetaCard" style="padding:12px 16px;">
+        <div class="flex-between" style="flex-wrap:wrap; gap:8px;">
+          <div class="rt-kv" style="gap:18px;">
+            <span><span class="k">深思考档（裁决/终审）</span><span class="v" id="rtMetaDeep">—</span></span>
+            <span><span class="k">快思考档（分析师/辩论）</span><span class="v" id="rtMetaQuick">—</span></span>
+            <span><span class="k">记忆库</span><span class="v" id="rtMetaMemory">—</span></span>
+          </div>
+          <div class="text-muted" style="font-size:12px;">所有数值来自当日真实行情快照，模型不得自行编造</div>
+        </div>
+      </div>
+
+      <!-- 事实锚 -->
+      <div class="card mb-20" id="rtSnapshotCard" style="display:none;">
+        <div class="card-title" style="margin-bottom:12px;">🧭 事实锚（数据快照）</div>
+        <div class="rt-kv" id="rtSnapshotBody"></div>
+        <div class="text-muted" id="rtSnapshotErrors" style="font-size:12px; margin-top:10px; display:none;"></div>
+      </div>
+
+      <!-- 进度 -->
+      <div class="card mb-20" id="rtProgressCard" style="display:none;">
+        <div class="flex-between" style="margin-bottom:10px;">
+          <div style="font-weight:600; font-size:14px;" id="rtProgressTitle">准备中…</div>
+          <div class="text-muted" style="font-size:12px;" id="rtProgressPct">0%</div>
+        </div>
+        <div class="rt-progress" style="margin-bottom:12px;"><i id="rtProgressBar"></i></div>
+        <div class="rt-stages" id="rtStages"></div>
+        <div class="text-muted" style="font-size:12px;" id="rtProgressMsg"></div>
+      </div>
+
+      <!-- 终审决策 -->
+      <div class="card mb-20" id="rtDecisionCard" style="display:none; border-left:4px solid var(--accent-purple);">
+        <div class="flex-between" style="margin-bottom:12px;">
+          <div class="card-title" id="rtDecisionTitle">🏛️ 组合经理终审</div>
+          <div id="rtDecisionTags"></div>
+        </div>
+        <div class="rt-kv" id="rtDecisionBody"></div>
+        <div id="rtDecisionDetail" style="margin-top:14px; font-size:13px; line-height:1.8; color:var(--text-secondary);"></div>
+      </div>
+
+      <!-- 实时实录 -->
+      <div class="card mb-20" id="rtFeedCard" style="display:none;">
+        <div class="flex-between" style="margin-bottom:12px;">
+          <div class="card-title">🎙️ 圆桌实录</div>
+          <div class="text-muted" style="font-size:12px;" id="rtFeedCount"></div>
+        </div>
+        <div class="rt-feed" id="rtFeed"></div>
+      </div>
+
+      <!-- 分析师报告 -->
+      <div class="card mb-20" id="rtReportsCard" style="display:none;">
+        <div class="card-title" style="margin-bottom:12px;">📚 分析师报告</div>
+        <div class="rt-grid2" id="rtReportsBody"></div>
+      </div>
+
+      <!-- 历史圆桌 -->
+      <div class="card mb-20" id="rtHistoryCard" style="display:none;">
+        <div class="flex-between" style="margin-bottom:12px;">
+          <div class="card-title">📋 历史圆桌</div>
+          <div class="text-muted" style="font-size:12px;">点击任意一行回放完整实录</div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr><th>时间</th><th>标的</th><th>基准日</th><th>决策</th><th>信心</th><th>耗时</th><th>状态</th></tr>
+            </thead>
+            <tbody id="rtHistoryRows">
+              <tr><td colspan="7" style="text-align:center; color:var(--text-muted); padding:20px 0;">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 记忆库 -->
+      <div class="card" id="rtMemoryCard">
+        <div class="flex-between" style="margin-bottom:12px;">
+          <div>
+            <div class="card-title">🧠 决策记忆与复盘</div>
+            <div class="card-subtitle" id="rtMemoryStats">持有期到点后自动结算真实收益与沪深300超额，并生成复盘教训</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary btn-sm" id="btnRtSettle">🔄 结算到期决策</button>
+            <button class="btn btn-secondary btn-sm" id="btnRtRefreshMemory">刷新</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>基准日</th><th>标的</th><th>决策</th><th>信心</th>
+                <th>持有</th><th>实际收益</th><th>超额</th><th>复盘教训</th>
+              </tr>
+            </thead>
+            <tbody id="rtMemoryRows">
+              <tr><td colspan="8" style="text-align:center; color:var(--text-muted); padding:24px 0;">暂无决策记忆</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- ==================== PAGE: Agent Decision ==================== -->
     <div class="page" id="page-agent-decision">
       <div class="flex-between mb-20">
@@ -1512,15 +1816,27 @@
             <div class="label">缓存大小</div>
             <div class="value" id="wl-cache-size" style="font-size:20px;">--</div>
           </div>
-          <div class="stat-card">
-            <div class="label">平均读取延迟</div>
-            <div class="value" id="wl-cache-latency" style="font-size:20px; color: var(--accent-green);">--</div>
-          </div>
+        <div class="stat-card">
+          <div class="label">平均读取延迟</div>
+          <div class="value" id="wl-cache-latency" style="font-size:20px; color: var(--accent-green);">--</div>
         </div>
+      </div>
+      </div>
+
+    <!-- 关注股票相关新闻 -->
+    <div class="card mt-16">
+      <div class="card-header">
+        <div class="card-title">📰 关注股票相关新闻（最多 50 条）</div>
+        <span class="tag tag-blue" id="wl-news-count">0</span>
+      </div>
+      <div id="wl-news-list" style="display:flex;flex-direction:column;gap:8px;padding-top:8px;">
+        <div class="text-muted" style="font-size:13px;">加载中...</div>
       </div>
     </div>
 
-    <!-- ==================== PAGE: Backtesting ==================== -->
+    </div>
+
+<!-- ==================== PAGE: Backtesting ==================== -->
     <div class="page" id="page-backtesting">
       <!-- 顶部：策略配置 -->
       <div class="flex-between mb-20">
@@ -2553,6 +2869,7 @@
         <option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option>
         <option value="openrouter">OpenRouter</option><option value="opencodezen">OpenCode Zen</option><option value="custom">Custom</option>
       </select>
+      <div class="platform-help" id="modalModelHelp" style="display:none;"></div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -2575,8 +2892,13 @@
     </div>
     <div class="form-group">
       <label>API Key</label>
-      <input type="password" id="modalModelApiKey" placeholder="sk-..." style="font-family:monospace;">
+      <input type="password" id="modalModelApiKey" placeholder="sk-... / oc_sk_..." style="font-family:monospace;">
       <div class="text-muted" style="margin-top:4px;">🔐 将使用 AES-256 加密存储</div>
+    </div>
+    <div class="form-group">
+      <label>额外请求头 <span style="font-size:11px;color:var(--text-muted);">（可选，JSON）</span></label>
+      <textarea id="modalModelHeaders" placeholder='如 {"x-opencode-session":"ses_xxx","User-Agent":"stock-analysis/1.0"}' style="font-family:monospace;font-size:12px;min-height:52px;"></textarea>
+      <div class="text-muted" style="margin-top:4px;">OpenCode Go 订阅必填；Authorization 等保留头会被忽略。</div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -2609,6 +2931,7 @@
         <option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option>
         <option value="openrouter">OpenRouter</option><option value="opencodezen">OpenCode Zen</option><option value="custom">Custom</option>
       </select>
+      <div class="platform-help" id="editModelHelp" style="display:none;"></div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -2633,6 +2956,11 @@
       <label>API Key <span style="font-size:11px;color:var(--text-muted);">（留空则不修改）</span></label>
       <input type="password" id="editModelApiKey" placeholder="留空表示不修改密钥" style="font-family:monospace;">
       <div class="text-muted" style="margin-top:4px;">🔐 当前密钥：<span id="editModelKeyHint" style="font-family:monospace;">****</span></div>
+    </div>
+    <div class="form-group">
+      <label>额外请求头 <span style="font-size:11px;color:var(--text-muted);">（可选，JSON；留空表示清空）</span></label>
+      <textarea id="editModelHeaders" placeholder='{"x-opencode-session":"ses_xxx","User-Agent":"stock-analysis/1.0"}' style="font-family:monospace;font-size:12px;min-height:52px;"></textarea>
+      <div class="text-muted" style="margin-top:4px;">OpenCode Go 订阅必填；Authorization 等保留头会被网关忽略。</div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -2730,6 +3058,7 @@
         'dashboard': 'Dashboard',
         'deep-analysis': '深度分析 · Serenity',
         'trend-analysis': '个股研判 · 涨跌概率',
+        'roundtable': '投研圆桌 · TradingAgents',
         'insight': '投资体检 · 综合评分卡',
         'capital-flow': '资金 & 筹码',
         'industry-analysis': '行业分析 · 申万一级',
@@ -3427,9 +3756,20 @@
   const PLATFORM_DEFAULTS = {
     openai: { baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'] },
     deepseek: { baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] },
-    openrouter: { baseUrl: 'https://openrouter.ai/api/v1', models: ['nvidia/nemotron-3-ultra-550b-a55b:free', 'deepseek/deepseek-v4.1-flash', 'z-ai/glm-5.3-prime', 'xingchen-agi/xing4.0-29b-a4b:free', 'openai/gpt-4o', 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'] },
-    opencodezen: { baseUrl: 'https://opencode.ai/inference/openai/v1', models: ['deepseek-v4.1-flash-free', 'glm-5.3-flash-free', 'nemotron-3.5-lightning-free', 'mimo-v2.6-flash-free', 'big-pickle', 'deepseek-v4.1-flash', 'glm-5.3', 'gpt-5.5', 'claude-sonnet-4.5', 'gemini-3.1-pro'] },
+    openrouter: { baseUrl: 'https://openrouter.ai/api/v1', models: ['nvidia/nemotron-3-ultra-550b-a55b:free', 'xingchen-agi/xing4.0-29b-a4b:free', 'deepseek/deepseek-v4.1-flash', 'z-ai/glm-5.3-prime', 'openai/gpt-4o', 'openai/gpt-4o-mini', 'anthropic/claude-sonnet-4', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat'] },
+    // OpenCode Zen / Console 官方 v2：外部 API 只有付费模型可用；
+    // 免费档（*-free / big-pickle）会被上游 403 拒绝，故不进入下拉列表。
+    opencodezen: { baseUrl: 'https://opencode.ai/inference/openai/v1', models: ['glm-5.3-flash', 'glm-5.3', 'glm-5.2', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'minimax-m3', 'kimi-k3', 'kimi-k2.7-code', 'qwen3.8-flash', 'gpt-5.5'] },
     custom: { baseUrl: '', models: [] }
+  };
+
+  // 平台策略提示：直接写在添加/编辑表单里，避免用户反复撞同一面墙
+  const PLATFORM_HELP = {
+    opencodezen: '⚠️ 官方策略：免费档（-free、big-pickle）仅限 OpenCode 客户端内使用，外部 API 即使带有效 Key 也返回 403。外部集成请选付费模型（如 glm-5.3-flash、deepseek-v4.1-flash）或订阅 OpenCode Go。Key 在 opencode.ai/console → Personal API keys 生成，形如 oc_sk_…。Go 订阅需把 Base URL 换成 https://opencode.ai/inference/go/openai/v1，并在下方「额外请求头」里填 {"x-opencode-session":"ses_...","User-Agent":"stock-analysis/1.0"}。',
+    openrouter: 'ℹ️ OpenRouter 免费 :free 模型按账户共享 50 次/天，UTC 00:00（北京时间 08:00）重置；换模型不增加额度，账户充值满 $10 可解锁 1000 次/天。Key 以 sk-or-v1- 开头。',
+    openai: 'ℹ️ OpenAI Key 以 sk-proj- / sk- 开头，需账户有余额；国内网络需配置代理。',
+    deepseek: 'ℹ️ DeepSeek Key 在 platform.deepseek.com 生成，模型为 deepseek-chat / deepseek-reasoner。',
+    custom: 'ℹ️ 任意兼容 OpenAI 接口的自建/代理服务，务必填写完整 Base URL（含 /v1）。',
   };
   let _fetchedModelCache = {};  // { platform: [modelId, ...] }
 
@@ -3442,6 +3782,7 @@
       modelSelect: prefix === 'modal' ? 'modalModelName2' : 'editModelModelName',
       modelCustom: prefix === 'modal' ? 'modalModelNameCustom' : 'editModelCustom',
       fetchStatus: prefix === 'modal' ? 'modalModelFetchStatus' : 'editModelFetchStatus',
+      help: prefix === 'modal' ? 'modalModelHelp' : 'editModelHelp',
     };
   }
 
@@ -3464,6 +3805,13 @@
     const cached = _fetchedModelCache[platform];
     const models = cached && cached.length ? cached : defaults.models;
     populateModelDropdown(prefix, models, '');
+    // Platform-specific policy hint (quota / free-tier restrictions / key format)
+    const helpEl = document.getElementById(ids.help);
+    if (helpEl) {
+      const help = PLATFORM_HELP[platform] || '';
+      helpEl.textContent = help;
+      helpEl.style.display = help ? 'block' : 'none';
+    }
     // OpenRouter exposes its full model list publicly; fetch it on demand.
     if (!cached && platform === 'openrouter') refreshProviderModels(prefix, true);
   }
@@ -3807,14 +4155,23 @@
       const resp = await API.post('/api/v1/models/available', body);
 
       const models = resp?.models || [];
+      const blocked = resp?.blocked_models || [];
       _fetchedModelCache[platform] = models;
       populateModelDropdown(prefix, models, currentModel);
 
       const source = resp?.source === 'live' ? '厂商实时' : '内置列表';
       if (statusEl) {
-        statusEl.textContent = `✅ 已从${source}获取 ${models.length} 个模型`;
+        // note 里是该平台的配额/策略说明（例如 Zen 免费档不能外部调用）
+        const noteHtml = resp?.note
+          ? `<div style="margin-top:3px;color:var(--accent-yellow);line-height:1.5;">⚠️ ${escapeHtml(resp.note)}</div>`
+          : '';
+        // 官方策略：免费档仅限 OpenCode 客户端，外部 API 调用必 403，后端已从可选列表剔除
+        const blockedHtml = blocked.length
+          ? `<div style="margin-top:3px;color:var(--accent-yellow);line-height:1.5;">🚫 已隐藏 ${blocked.length} 个仅限 OpenCode 客户端的免费模型（外部 API 返回 403）</div>`
+          : '';
+        statusEl.innerHTML = `✅ 已从${source}获取 ${models.length} 个模型${noteHtml}${blockedHtml}`;
         statusEl.style.color = 'var(--accent-green)';
-        setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
+        setTimeout(() => { statusEl.style.display = 'none'; }, 6000);
       }
       if (!silent) {
         if (resp?.source === 'live') {
@@ -3865,7 +4222,15 @@
         // 上次连接测试的结果（持久显示在卡片上，便于对照排查）
         const st = (window._modelTestState || {})[m.id];
         const testLine = st
-          ? `<div class="model-test-line ${st.ok ? 'ok' : 'bad'}">${st.ok ? '✅' : '❌'} ${escapeHtml(st.text)}</div>`
+          ? `<div class="model-test-line ${st.ok ? 'ok' : 'bad'}">${st.ok ? '✅' : '❌'} ${escapeHtml(st.text)}${
+              st.raw ? `<details><summary>查看原始错误</summary><pre>${escapeHtml(st.raw)}</pre></details>` : ''
+            }</div>`
+          : '';
+        // Key 与平台不匹配：后端已判定必然失败，直接标在卡片上
+        // （若刚测过且失败原因就是这条，则不重复展示，避免同一句话出现两遍）
+        const dupKeyWarn = st && !st.ok && (st.text || '').includes('Key 归属异常');
+        const keyWarnLine = (m.key_warning && !dupKeyWarn)
+          ? `<div class="model-key-warn">⚠️ ${escapeHtml(m.key_warning)}</div>`
           : '';
         // 已软删除的配置：置灰并提供「恢复」
         if (m.status === 'deleted') {
@@ -3887,6 +4252,7 @@
           <div class="model-info">
             <div class="model-name">${escapeHtml(m.name)} · ${escapeHtml(m.model_name)}</div>
             <div class="model-meta">${m.platform} · ${m.base_url || 'default'} · Token: ${m.max_tokens} · Temp: ${m.temperature} · Key: ${m.api_key_masked}</div>
+            ${keyWarnLine}
             ${testLine}
           </div>
           <div class="model-status">${statusDot}${defaultTag}</div>
@@ -3913,7 +4279,11 @@
       window._modelTestState = window._modelTestState || {};
       window._modelTestState[id] = result.success
         ? { ok: true, text: `连接正常 · 延迟 ${result.latency_ms}ms` }
-        : { ok: false, text: `${result.error || '连接失败'}${result.hint ? '（建议：' + result.hint + '）' : ''}` };
+        : {
+            ok: false,
+            text: `${result.error || '连接失败'}${result.hint ? '（建议：' + result.hint + '）' : ''}`,
+            raw: result.raw_error || '',
+          };
       if (result.success) toast(`✅ 连接成功 · 延迟 ${result.latency_ms}ms`, 'success');
       else toast('❌ 连接失败，详见卡片说明', 'error');
       pageLoaders['model-config']();
@@ -3960,6 +4330,8 @@
     { type: 'scene', key: 'code_strategy',  label: '🖥️ 代码与策略生成', desc: '代码生成优化，策略脚本编写' },
     { type: 'scene', key: 'trend_analysis', label: '📊 AI 趋势分析场景', desc: '日常趋势分析用低成本模型' },
     { type: 'scene', key: 'serenity',       label: '🔬 Serenity 深度分析', desc: '深度推理需最强模型' },
+    { type: 'scene', key: 'roundtable_deep',  label: '🏛️ 投研圆桌 · 深思考档', desc: '研究裁决/交易计划/组合经理终审' },
+    { type: 'scene', key: 'roundtable_quick', label: '🏛️ 投研圆桌 · 快思考档', desc: '分析师报告与多空辩论' },
     { type: 'agent', key: 'AGENT-PM-01',   label: '👑 投资组合经理',   desc: '最终决策需最强判断力' },
   ];
 
@@ -4100,6 +4472,13 @@
     document.getElementById('editModelMaxTokens').value = m.max_tokens || 4096;
     document.getElementById('editModelTemp').value = m.temperature ?? 0.7;
     document.getElementById('editModelEnabled').checked = m.is_enabled !== false;
+    // 额外请求头回显（OpenCode Go 的 x-opencode-session 等）
+    const editHeadersInput = document.getElementById('editModelHeaders');
+    if (editHeadersInput) {
+      const hdrs = (m.extra_headers && typeof m.extra_headers === 'object' && !Array.isArray(m.extra_headers))
+        ? m.extra_headers : null;
+      editHeadersInput.value = (hdrs && Object.keys(hdrs).length) ? JSON.stringify(hdrs, null, 2) : '';
+    }
 
     // Populate model dropdown with current model
     const cached = _fetchedModelCache[platform];
@@ -4129,7 +4508,23 @@
       return;
     }
 
-    const payload = { name, platform, model_name: modelName, max_tokens: maxTokens, temperature, is_enabled: isEnabled };
+    // 留空表示清空已配置的请求头；填写则必须是 JSON 对象
+    let extraHeaders = {};
+    const headersRaw = document.getElementById('editModelHeaders')?.value?.trim();
+    if (headersRaw) {
+      try {
+        extraHeaders = JSON.parse(headersRaw);
+      } catch (e) {
+        toast('额外请求头不是合法 JSON', 'warn');
+        return;
+      }
+      if (!extraHeaders || typeof extraHeaders !== 'object' || Array.isArray(extraHeaders)) {
+        toast('额外请求头必须是 JSON 对象，如 {"User-Agent":"xxx"}', 'warn');
+        return;
+      }
+    }
+
+    const payload = { name, platform, model_name: modelName, max_tokens: maxTokens, temperature, is_enabled: isEnabled, extra_headers: extraHeaders };
     if (baseUrl) payload.base_url = baseUrl;
     if (apiKey) payload.api_key = apiKey;  // only send API key if user entered a new one
 
@@ -4536,12 +4931,28 @@
       // 缓存统计（真实数据，失败降级为 --）
       let cacheStats = null;
       try { cacheStats = await API.get('/api/v1/watchlist/cache-stats') || null; } catch (e) { /* ignore */ }
+
+      // 相关新闻（最多 50 条，时间倒序；关联到关注列表中的股票）
+      let wlNews = null;
+      try { wlNews = await API.get('/api/v1/watchlist/news') || null; } catch (e) { /* ignore */ }
       const applyStats = () => {
         document.getElementById('wl-watched-count').textContent = String(items.length || 0);
         const c = cacheStats || {};
         document.getElementById('wl-cached-quotes').textContent = c.cached_quotes != null ? String(c.cached_quotes) : '--';
         document.getElementById('wl-cache-size').textContent = c.memory_used || '--';
         document.getElementById('wl-cache-latency').textContent = avgLatencyMs != null ? `${avgLatencyMs} ms` : '--';
+      };
+      const renderWatchlistNews = () => {
+        const list = document.getElementById('wl-news-list');
+        const countTag = document.getElementById('wl-news-count');
+        if (!list) return;
+        const news = wlNews || [];
+        countTag.textContent = String(news.length);
+        if (!news.length) {
+          list.innerHTML = '<div class="text-muted" style="font-size:13px;">暂无相关新闻</div>';
+          return;
+        }
+        list.innerHTML = news.map(watchlistNewsMarkup).join('');
       };
 
       if (!items.length) {
@@ -4587,6 +4998,7 @@
           removeWatchlist(id);
         }
       };
+      renderWatchlistNews();
       applyStats();
     } catch (e) {
       console.warn('Watchlist load failed:', e.message);
@@ -6560,6 +6972,28 @@
   }
 
   // 简单 HTML 转义, 防止 XSS
+  function watchlistNewsMarkup(n) {
+    const text = value => escapeHtml(String(value ?? ''));
+    let url = '';
+    try {
+      const parsed = new URL(String(n.url || ''));
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') url = parsed.href;
+    } catch (_) { /* Invalid links are omitted. */ }
+    const tags = n.published_at ? `<span class="text-muted" style="font-size:11px;margin-right:8px;">${text(String(n.published_at).slice(0,16).replace('T',' '))}</span>` : '';
+    const src = n.source ? `<span class="text-muted" style="font-size:11px;">${text(n.source)}</span>` : '';
+    const tag = n.sentiment ? `<span class="tag ${n.sentiment==='positive'?'tag-green':(n.sentiment==='negative'?'tag-red':'tag-blue')}">${text(n.sentiment)}</span>` : '';
+    const heat = n.heat_score != null ? `<span class="text-muted" style="font-size:10px;margin-left:6px;">热度 ${text(n.heat_score)}</span>` : '';
+    const rel = Array.isArray(n.related_stocks) && n.related_stocks.length
+      ? `<span class="text-muted" style="font-size:11px;">相关: ${text(n.related_stocks.map(r => typeof r === 'string' ? r : (r?.symbol || r?.code || '')).join(','))}</span>` : '';
+    return `<div style="display:flex;flex-direction:column;gap:4px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);font-size:13px;">
+      <div style="display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap;">${tags}${src}${tag}${heat}</div>
+      <div style="font-weight:600;">${text(n.title)}</div>
+      ${n.summary ? `<div class="text-muted" style="font-size:12px;">${text(n.summary)}</div>` : ''}
+      ${rel ? `<div class="text-muted" style="font-size:11px;">${rel}</div>` : ''}
+      ${url ? `<a href="${text(url)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:var(--accent-blue);text-decoration:underline;">阅读原文</a>` : ''}
+    </div>`;
+  }
+
   function escapeHtml(s) {
     if (s == null) return '';
     return String(s)
@@ -7678,9 +8112,10 @@
   const originalDashboardLoader = pageLoaders['dashboard'];
   pageLoaders['dashboard'] = async function() {
     if (originalDashboardLoader) await originalDashboardLoader();
-    await Promise.all([loadDashboardIndices(), loadDashboardMarket(), loadDataSourceHealth()]);
+    await Promise.all([loadDashboardIndices(), loadDashboardMarket(), loadDataSourceHealth(), loadGlobalMarkets()]);
     await loadDashboardWatchlist();
     startDashboardAutoRefresh();
+    startGlobalMarketsRefresh();
   };
 
   // ===== Dashboard 市场环境 =====
@@ -7697,6 +8132,107 @@
       el.title = `数据源可用性：${srcs || '未知'}`;
     } catch (e) { /* 保留默认文案 */ }
   }
+
+  // ===== Dashboard 顶部：全球市场速览（美股 / 韩国科技股，60s 刷新）=====
+  const GM_REFRESH_MS = 60000;
+  let globalMarketsTimer = null;
+
+  function fmtGmPrice(v) {
+    if (v === null || v === undefined || isNaN(v)) return '--';
+    const n = Number(v);
+    if (n >= 10000) return n.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+    if (n >= 1000) return n.toLocaleString('zh-CN', { maximumFractionDigits: 1 });
+    return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // 常用简称，省横向空间（后端仍返回完整名，用于 title 提示）
+  const GM_SHORT_NAME = { '纳斯达克': '纳指', '道琼斯': '道指', '韩国综合': '韩综指' };
+
+  function renderGlobalMarkets(d) {
+    const track = document.getElementById('gmTrack');
+    if (!track) return;
+    const groups = d.groups || [];
+    if (!groups.length) {
+      track.innerHTML = '<span class="gm-state">暂无数据</span>';
+      return;
+    }
+    const parts = [];
+    groups.forEach((g, gi) => {
+      if (gi) parts.push('<span class="gm-sep"></span>');
+      parts.push(`<span class="gm-group">${g.label}</span>`);
+      (g.items || []).forEach(it => {
+        const pct = it.change_pct;
+        const cls = pct === null || pct === undefined ? 'flat' : (pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat');
+        const arrow = cls === 'up' ? '▲' : cls === 'down' ? '▼' : '';
+        const pctTxt = (pct === null || pct === undefined) ? '--' : `${pct > 0 ? '+' : ''}${Number(pct).toFixed(2)}%`;
+        const tip = `${it.name} ${it.symbol} · ${fmtGmPrice(it.price)}${it.currency ? ' ' + it.currency : ''} · ${pctTxt}`;
+        parts.push(
+          `<span class="gm-item" title="${tip}">` +
+          `<span class="gm-name">${GM_SHORT_NAME[it.name] || it.name}</span>` +
+          `<span class="gm-chg ${cls}">${arrow}${pctTxt}</span>` +
+          `</span>`
+        );
+      });
+    });
+    track.innerHTML = parts.join('');
+
+    // 只有真正溢出时才加右侧渐隐
+    const stripEl = document.getElementById('globalMarketsStrip');
+    if (stripEl) {
+      stripEl.classList.toggle('gm-overflow', track.scrollWidth > track.clientWidth + 2);
+    }
+
+    const stampEl = document.getElementById('gmUpdated');
+    if (stampEl) {
+      let t = null;
+      if (d.updated_at) {
+        const dt = new Date(d.updated_at);
+        if (!isNaN(dt.getTime())) t = dt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+      stampEl.textContent = d.stale ? '延迟' : (t || '--:--');
+      stampEl.title = `数据更新于 ${t || '未知'}${d.cached ? '（服务端缓存）' : ''}`;
+    }
+    const strip = document.getElementById('globalMarketsStrip');
+    if (strip) {
+      strip.title = `美股 / 韩国科技股最新涨跌（Yahoo Finance，非交易时段为最近收盘价）· 每 60 秒刷新`;
+    }
+  }
+
+  async function loadGlobalMarkets() {
+    const track = document.getElementById('gmTrack');
+    try {
+      const d = await API.get('/api/v1/market/global');
+      renderGlobalMarkets(d || {});
+    } catch (e) {
+      if (track && !track.querySelector('.gm-item')) {
+        track.innerHTML = '<span class="gm-state">数据暂不可用</span>';
+      }
+      console.warn('global markets load failed:', e.message);
+    }
+  }
+
+  function startGlobalMarketsRefresh() {
+    stopGlobalMarketsRefresh();
+    globalMarketsTimer = setInterval(() => {
+      const dashboard = document.getElementById('page-dashboard');
+      // 页面不可见（切到别的 tab 或窗口在后台）时不请求，回来立刻补一次
+      if (dashboard && dashboard.classList.contains('active') && !document.hidden) {
+        loadGlobalMarkets();
+      }
+    }, GM_REFRESH_MS);
+  }
+  function stopGlobalMarketsRefresh() {
+    if (globalMarketsTimer) {
+      clearInterval(globalMarketsTimer);
+      globalMarketsTimer = null;
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    const dashboard = document.getElementById('page-dashboard');
+    if (!document.hidden && dashboard && dashboard.classList.contains('active')) {
+      loadGlobalMarkets();
+    }
+  });
 
   async function loadDashboardMarket() {
     const card = document.getElementById('mktRegimeCard');
@@ -8175,12 +8711,29 @@
       return;
     }
 
+    // 额外请求头：留空不传；填写则必须是 JSON 对象（OpenCode Go 的 session 头等）
+    let extraHeaders = null;
+    const headersRaw = document.getElementById('modalModelHeaders')?.value?.trim();
+    if (headersRaw) {
+      try {
+        extraHeaders = JSON.parse(headersRaw);
+      } catch (e) {
+        toast('额外请求头不是合法 JSON', 'warn');
+        return;
+      }
+      if (!extraHeaders || typeof extraHeaders !== 'object' || Array.isArray(extraHeaders)) {
+        toast('额外请求头必须是 JSON 对象，如 {"User-Agent":"xxx"}', 'warn');
+        return;
+      }
+    }
+
     try {
       const result = await API.post('/api/v1/models', {
         name, platform, base_url: baseUrl || null,
         api_key: apiKey, model_name: modelName,
         max_tokens: maxTokens, temperature,
         is_default: false, is_enabled: true,
+        extra_headers: extraHeaders,
       });
       toast('✅ 模型添加成功', 'success');
       document.getElementById('modalAddModel').style.display = 'none';
@@ -8775,6 +9328,439 @@
       rowsEl.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--accent-red);padding:18px 0;">${escapeHtml(e.message)}</td></tr>`;
     }
   }
+
+  // ===== Trading Roundtable（投研圆桌） =====
+  const RT_STAGES = ['分析师团队', '多空辩论', '研究经理裁决', '交易计划', '三方风控辩论', '组合经理终审', '记忆反思'];
+  // 涨跌/买卖配色沿用全站约定：涨/买入=绿，跌/卖出=红
+  const RT_ACTION = {
+    buy: { label: '买入', cls: 'tag-green' },
+    sell: { label: '卖出', cls: 'tag-red' },
+    hold: { label: '观望', cls: 'tag-yellow' },
+  };
+
+  function rtActionTag(action) {
+    const meta = RT_ACTION[action] || { label: action || '—', cls: 'tag-gray' };
+    return `<span class="tag ${meta.cls}">${escapeHtml(meta.label)}</span>`;
+  }
+
+  function rtFriendlyError(msg) {
+    const s = String(msg || '');
+    if (/rate limit|429|free-models-per-day|quota/i.test(s)) return '模型调用额度已用尽（429 限流）';
+    if (/no usable model|all disabled|cooling down/i.test(s)) return '没有可用模型（未配置或全部冷却）';
+    if (/timeout|timed out|超时/i.test(s)) return '调用超时';
+    if (/401|api_key|authentication|invalid key/i.test(s)) return '模型鉴权失败（API Key 无效）';
+    return s.length > 120 ? s.slice(0, 120) + '…' : s;
+  }
+
+  // 错误提示去重 + 截断，避免把整段 429 报文糊在页面上
+  function rtRenderErrors(list, title) {
+    const el = document.getElementById('rtSnapshotErrors');
+    if (!el) return;
+    const items = Array.from(new Set((list || []).map(rtFriendlyError))).filter(Boolean);
+    if (!items.length) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = 'block';
+    el.innerHTML = `<b style="color:var(--accent-yellow);">${escapeHtml(title || '降级提示')}</b>：`
+      + items.slice(0, 3).map(escapeHtml).join('；')
+      + (items.length > 3 ? `；等 ${items.length} 项` : '');
+  }
+
+  function rtRenderStagesAllDone() {
+    const wrap = document.getElementById('rtStages');
+    if (!wrap) return;
+    if (wrap.children.length) return;
+    wrap.innerHTML = RT_STAGES.map(s => `<div class="rt-stage done">${escapeHtml(s)}</div>`).join('');
+  }
+
+  // 轻量 markdown → HTML（先转义，再处理标题/加粗/列表）
+  function rtFormat(text) {
+    let s = escapeHtml(String(text || ''));
+    s = s.replace(/^\s*#{2,4}\s*(.+)$/gm,
+      '<div style="font-weight:600;color:var(--text-primary);margin:8px 0 4px;">$1</div>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    s = s.replace(/^\s*[-•]\s+(.+)$/gm,
+      '<div style="padding-left:14px;position:relative;"><span style="position:absolute;left:2px;">•</span>$1</div>');
+    s = s.replace(/^\s*(\d+)\.\s+(.+)$/gm,
+      '<div style="padding-left:16px;position:relative;"><span style="position:absolute;left:0;">$1.</span>$2</div>');
+    return s;
+  }
+
+  function rtSetProgress(pct, message, title) {
+    const bar = document.getElementById('rtProgressBar');
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+    const pctEl = document.getElementById('rtProgressPct');
+    if (pctEl) pctEl.textContent = Math.round(pct || 0) + '%';
+    const msgEl = document.getElementById('rtProgressMsg');
+    if (msgEl && message) msgEl.textContent = message;
+    const titleEl = document.getElementById('rtProgressTitle');
+    if (titleEl && title) titleEl.textContent = title;
+  }
+
+  function rtMarkStage(stage, status) {
+    const wrap = document.getElementById('rtStages');
+    if (!wrap || !stage) return;
+    let el = wrap.querySelector(`.rt-stage[data-stage="${stage}"]`);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'rt-stage';
+      el.dataset.stage = stage;
+      el.textContent = stage;
+      wrap.appendChild(el);
+    }
+    el.classList.toggle('running', status === 'running');
+    el.classList.toggle('done', status === 'done');
+    if (status === 'running') el.classList.remove('done');
+  }
+
+  function rtAppendEntry(entry) {
+    const feed = document.getElementById('rtFeed');
+    if (!feed) return;
+    const div = document.createElement('div');
+    div.className = 'rt-msg ' + (entry.side || 'analyst');
+    const roundTag = entry.round ? `<span class="rt-mini">第 ${entry.round} 轮</span>` : '';
+    const kindTag = entry.kind === 'rebuttal' ? '<span class="rt-mini">反驳</span>' : '';
+    div.innerHTML = `
+      <div class="avatar">${entry.icon || '🤖'}</div>
+      <div class="body">
+        <div class="who">
+          <b>${escapeHtml(entry.agent || entry.role || '')}</b>
+          <span class="rt-mini">${escapeHtml(entry.phase_label || '')}</span>
+          ${roundTag}${kindTag}
+        </div>
+        <div class="text">${rtFormat(entry.content)}</div>
+      </div>`;
+    feed.appendChild(div);
+    feed.scrollTop = feed.scrollHeight;
+    const cnt = document.getElementById('rtFeedCount');
+    if (cnt) cnt.textContent = `${feed.children.length} 条发言`;
+  }
+
+  function rtRenderSnapshot(snap) {
+    if (!snap) return;
+    const fc = snap.forecast || {};
+    const chg = snap.change_pct;
+    const chgColor = chg == null ? 'var(--text-primary)' : (chg > 0 ? 'var(--accent-green)' : chg < 0 ? 'var(--accent-red)' : 'var(--text-primary)');
+    const items = [
+      ['最新价', snap.price != null ? `${snap.price} 元` : '—', 'var(--text-primary)'],
+      ['日涨跌', chg != null ? `${chg > 0 ? '+' : ''}${chg}%` : '—', chgColor],
+      ['技术评分', fc.technical_score != null ? fc.technical_score : '—', 'var(--text-primary)'],
+      ['上涨概率', fc.up_probability != null ? `${fc.up_probability}%` : '—', 'var(--text-primary)'],
+      ['多周期', (fc.multi_timeframe || {}).resonance || '—', 'var(--text-primary)'],
+      ['新闻', `${snap.news_count || 0} 条`, 'var(--text-primary)'],
+      ['K线', `${snap.bars || 0} 根`, 'var(--text-primary)'],
+      ['行业', (snap.fundamental || {}).industry || '—', 'var(--text-primary)'],
+    ];
+    document.getElementById('rtSnapshotBody').innerHTML = items.map(([k, v, c]) =>
+      `<span><span class="k">${k}</span><span class="v" style="color:${c}">${escapeHtml(String(v))}</span></span>`
+    ).join('');
+    document.getElementById('rtSnapshotCard').style.display = 'block';
+
+    const errEl = document.getElementById('rtSnapshotErrors');
+    const errs = (snap.errors || []);
+    if (errs.length) {
+      rtRenderErrors(errs, '数据降级提示');
+    } else {
+      errEl.style.display = 'none';
+      errEl.textContent = '';
+    }
+  }
+
+  function rtRenderReports(reports) {
+    if (!reports) return;
+    const map = [
+      ['market', '📈 市场技术分析师'],
+      ['fundamentals', '📊 基本面分析师'],
+      ['news', '📰 新闻分析师'],
+      ['sentiment', '🌡️ 情绪分析师'],
+    ];
+    document.getElementById('rtReportsBody').innerHTML = map.map(([key, label]) => {
+      const text = reports[key] || '（无内容）';
+      return `<details class="rt-report">
+        <summary>${label}<span class="rt-mini">${text.length} 字</span></summary>
+        <div class="rt-report-body">${rtFormat(text)}</div>
+      </details>`;
+    }).join('');
+    document.getElementById('rtReportsCard').style.display = 'block';
+  }
+
+  function rtRenderDecision(decision, meta) {
+    if (!decision) return;
+    const d = decision || {};
+    const conf = Math.round((d.confidence || 0) * 100);
+    document.getElementById('rtDecisionTitle').textContent =
+      `🏛️ 组合经理终审 · ${escapeHtml(meta.name || '')}（${escapeHtml(meta.symbol || '')}）`;
+    document.getElementById('rtDecisionTags').innerHTML =
+      `${rtActionTag(d.action)}` +
+      `<span class="rt-mini" style="margin-left:6px;">信心 ${conf}%</span>` +
+      (meta.elapsed_ms ? `<span class="rt-mini" style="margin-left:6px;">耗时 ${(meta.elapsed_ms / 1000).toFixed(1)}s</span>` : '') +
+      (d.degraded ? `<span class="tag tag-yellow" style="margin-left:6px;">降级兜底</span>` : '');
+
+    const kv = [
+      ['入场', d.entry_price != null ? d.entry_price : '—'],
+      ['目标', d.target_price != null ? d.target_price : '—'],
+      ['止损', d.stop_loss != null ? d.stop_loss : '—'],
+      ['建议仓位', `${d.position_pct != null ? d.position_pct : '—'}%`],
+      ['持有期', `${d.horizon_days || '—'} 交易日`],
+    ];
+    document.getElementById('rtDecisionBody').innerHTML =
+      kv.map(([k, v]) => `<span><span class="k">${k}</span><span class="v">${escapeHtml(String(v))}</span></span>`).join('') +
+      `<span style="width:170px;"><span class="k">信心</span><span class="rt-conf"><i style="width:${conf}%"></i></span></span>`;
+
+    const bits = [];
+    if (d.rationale) bits.push(`<div><b style="color:var(--text-primary);">决策理由：</b>${rtFormat(d.rationale)}</div>`);
+    if ((d.key_risks || []).length) bits.push(`<div style="margin-top:8px;"><b style="color:var(--text-primary);">关键风险：</b>${d.key_risks.map(r => escapeHtml(r)).join('；')}</div>`);
+    if ((d.memory_used || []).length) bits.push(`<div style="margin-top:8px;"><b style="color:var(--accent-purple);">参考的历史教训：</b>${d.memory_used.map(r => escapeHtml(r)).join('；')}</div>`);
+    if (d.lessons) bits.push(`<div style="margin-top:8px;"><b style="color:var(--accent-cyan);">本次要记住的教训：</b>${escapeHtml(d.lessons)}</div>`);
+    document.getElementById('rtDecisionDetail').innerHTML = bits.join('');
+
+    document.getElementById('rtDecisionCard').style.display = 'block';
+  }
+
+  function rtRenderRun(data) {
+    if (!data) return;
+    document.getElementById('rtProgressCard').style.display = 'block';
+    rtSetProgress(100, '圆桌结束', '✅ 圆桌完成');
+    rtRenderStagesAllDone();
+
+    rtRenderSnapshot(data.snapshot);
+    rtRenderReports(data.analyst_reports);
+    rtRenderDecision(data.decision, {
+      name: data.name, symbol: data.symbol, elapsed_ms: data.elapsed_ms,
+    });
+
+    // 回放实录
+    const feed = document.getElementById('rtFeed');
+    feed.innerHTML = '';
+    (data.transcript || []).forEach(rtAppendEntry);
+    feed.scrollTop = 0;   // 回放从第一条开始看
+    document.getElementById('rtFeedCard').style.display = 'block';
+
+    // 记忆结算统计
+    const stats = data.memory_stats || {};
+    if (stats.settled) {
+      const statEl = document.getElementById('rtMemoryStats');
+      if (statEl) statEl.textContent = `本次结算 ${stats.settled} 条历史决策（检查 ${stats.checked} 条）`;
+    }
+
+    if ((data.errors || []).length) rtRenderErrors(data.errors, '运行告警');
+  }
+
+  function rtResetUI() {
+    document.getElementById('rtProgressCard').style.display = 'block';
+    document.getElementById('rtDecisionCard').style.display = 'none';
+    document.getElementById('rtReportsCard').style.display = 'none';
+    document.getElementById('rtFeedCard').style.display = 'block';
+    document.getElementById('rtSnapshotCard').style.display = 'none';
+    document.getElementById('rtFeed').innerHTML = '';
+    document.getElementById('rtFeedCount').textContent = '';
+    document.getElementById('rtStages').innerHTML = '';
+    document.getElementById('rtSnapshotErrors').style.display = 'none';
+    rtSetProgress(0, '正在连接圆桌引擎…', '准备中…');
+  }
+
+  async function rtRunRoundtable() {
+    const input = document.getElementById('rtStockInput');
+    const raw = (input.value || '').trim();
+    if (!raw) { toast('请输入股票代码或名称', 'warn'); input.focus(); return; }
+
+    const btn = document.getElementById('btnRtRun');
+    btn.disabled = true;
+    btn.textContent = '⏳ 圆桌进行中…';
+    rtResetUI();
+
+    const started = performance.now();
+    const ticker = setInterval(() => {
+      const t = document.getElementById('rtProgressMsg');
+      if (t && !t.dataset.final) {
+        const el = document.getElementById('rtProgressTitle');
+        if (el) el.textContent = `圆桌进行中 · ${((performance.now() - started) / 1000).toFixed(0)}s`;
+      }
+    }, 1000);
+
+    try {
+      const resp = await fetch(API_BASE + '/api/v1/roundtable/run/stream', {
+        method: 'POST',
+        headers: { ...API._headers(), 'Accept': 'text/event-stream', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: raw,
+          max_debate_rounds: Number(document.getElementById('rtDebateRounds').value) || 2,
+          max_risk_rounds: Number(document.getElementById('rtRiskRounds').value) || 1,
+          horizon_days: Number(document.getElementById('rtHorizon').value) || 10,
+        }),
+      });
+      if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = '';
+      let finalResult = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            let payload;
+            try { payload = JSON.parse(line.slice(6)); } catch (e) { continue; }
+            if (currentEvent === 'phase') {
+              rtSetProgress(payload.pct || 0, payload.message || '', payload.stage || '');
+              rtMarkStage(payload.stage, payload.status);
+            } else if (currentEvent === 'agent') {
+              rtAppendEntry(payload);
+            } else if (currentEvent === 'result') {
+              finalResult = payload;
+            } else if (currentEvent === 'error') {
+              throw new Error(payload.message || '圆桌运行失败');
+            }
+          }
+        }
+      }
+
+      if (!finalResult) throw new Error('圆桌结束但没有返回结果');
+      const msgEl = document.getElementById('rtProgressMsg');
+      if (msgEl) msgEl.dataset.final = '1';
+      rtRenderRun(finalResult);
+      toast('圆桌完成', 'success');
+      rtLoadMemory();
+    } catch (e) {
+      rtSetProgress(0, '', '❌ 圆桌运行失败');
+      const msgEl = document.getElementById('rtProgressMsg');
+      if (msgEl) msgEl.textContent = rtFriendlyError(e.message);
+      toast(rtFriendlyError(e.message) || '圆桌运行失败', 'error');
+    } finally {
+      clearInterval(ticker);
+      btn.disabled = false;
+      btn.textContent = '🚀 召开圆桌';
+    }
+  }
+
+  async function rtLoadMeta() {
+    try {
+      const meta = await API.get('/api/v1/roundtable/meta');
+      const models = meta.models || {};
+      document.getElementById('rtMetaDeep').textContent = models.deep || '默认模型';
+      document.getElementById('rtMetaQuick').textContent = models.quick || '默认模型';
+      const mem = meta.memory || {};
+      document.getElementById('rtMetaMemory').textContent =
+        `${mem.total || 0} 条（已结算 ${mem.settled || 0}）`;
+    } catch (e) {
+      document.getElementById('rtMetaDeep').textContent = '读取失败';
+    }
+  }
+
+  async function rtLoadMemory() {
+    const tbody = document.getElementById('rtMemoryRows');
+    if (!tbody) return;
+    try {
+      const data = await API.get('/api/v1/roundtable/memory', { limit: 20 });
+      const items = data.items || [];
+      const stats = data.stats || {};
+      const statEl = document.getElementById('rtMemoryStats');
+      if (statEl) {
+        const hit = stats.hit_rate_pct;
+        statEl.textContent = `共 ${stats.total || 0} 条 · 已结算 ${stats.settled || 0}`
+          + (hit != null ? ` · 方向命中率 ${hit}%` : '')
+          + (stats.avg_return_pct != null ? ` · 平均收益 ${stats.avg_return_pct}%` : '')
+          + (stats.avg_alpha_pct != null ? ` · 平均超额 ${stats.avg_alpha_pct}%` : '');
+      }
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted); padding:24px 0;">暂无决策记忆，先跑一场圆桌</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(m => {
+        const ret = m.realized_return_pct;
+        const retColor = ret == null ? 'var(--text-muted)'
+          : ret > 0 ? 'var(--accent-green)' : ret < 0 ? 'var(--accent-red)' : 'var(--text-primary)';
+        const alpha = m.alpha_pct;
+        const alphaColor = alpha == null ? 'var(--text-muted)'
+          : alpha > 0 ? 'var(--accent-green)' : alpha < 0 ? 'var(--accent-red)' : 'var(--text-primary)';
+        return `<tr>
+          <td style="white-space:nowrap;">${m.trade_date || '—'}</td>
+          <td style="white-space:nowrap;">${escapeHtml(m.name || '')}<div class="text-muted" style="font-size:11px;">${escapeHtml(m.symbol || '')}</div></td>
+          <td>${rtActionTag(m.signal)}</td>
+          <td>${m.confidence != null ? Math.round(m.confidence * 100) + '%' : '—'}</td>
+          <td>${m.horizon_days || '—'} 日 ${m.settled ? '' : '<span class="rt-mini">待结算</span>'}</td>
+          <td style="color:${retColor};">${ret != null ? (ret > 0 ? '+' : '') + ret + '%' : '—'}</td>
+          <td style="color:${alphaColor};">${alpha != null ? (alpha > 0 ? '+' : '') + alpha + '%' : '—'}</td>
+          <td style="max-width:420px; font-size:12px; color:var(--text-secondary);">${escapeHtml(m.reflection || '—')}</td>
+        </tr>`;
+      }).join('');
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--accent-red); padding:20px 0;">${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  async function rtLoadHistory() {
+    const card = document.getElementById('rtHistoryCard');
+    const tbody = document.getElementById('rtHistoryRows');
+    card.style.display = 'block';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted); padding:20px 0;">加载中…</td></tr>';
+    try {
+      const rows = await API.get('/api/v1/roundtable/runs', { limit: 20 });
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted); padding:20px 0;">暂无历史圆桌</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(r => `<tr class="rt-hist-row" data-sid="${escapeHtml(r.session_id)}">
+        <td style="white-space:nowrap; font-size:12px;">${(r.created_at || '').replace('T', ' ').slice(0, 16)}</td>
+        <td>${escapeHtml(r.name || '')}<div class="text-muted" style="font-size:11px;">${escapeHtml(r.symbol || '')}</div></td>
+        <td>${r.trade_date || '—'}</td>
+        <td>${rtActionTag(r.signal)}</td>
+        <td>${r.confidence != null ? Math.round(r.confidence * 100) + '%' : '—'}</td>
+        <td>${r.elapsed_ms ? (r.elapsed_ms / 1000).toFixed(1) + 's' : '—'}</td>
+        <td><span class="rt-mini">${escapeHtml(r.status || '')}</span></td>
+      </tr>`).join('');
+      tbody.querySelectorAll('.rt-hist-row').forEach(tr => {
+        tr.addEventListener('click', async () => {
+          try {
+            const data = await API.get(`/api/v1/roundtable/runs/${tr.dataset.sid}`);
+            rtResetUI();
+            rtRenderRun(data);
+            document.getElementById('rtStockInput').value = data.symbol || '';
+            document.getElementById('rtProgressMsg').textContent = `已回放 ${data.session_id}`;
+            document.getElementById('page-roundtable').scrollIntoView({ behavior: 'smooth', block: 'start' });
+          } catch (e) {
+            toast('加载历史圆桌失败：' + e.message, 'error');
+          }
+        });
+      });
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--accent-red); padding:20px 0;">${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  pageLoaders['roundtable'] = async function () {
+    rtLoadMeta();
+    rtLoadMemory();
+  };
+
+  attachStockSuggest('rtStockInput', 'rtStockSuggest', {
+    onSelect: (s) => { document.getElementById('rtStockInput').value = s.symbol; },
+  });
+  document.getElementById('btnRtRun')?.addEventListener('click', rtRunRoundtable);
+  document.getElementById('rtStockInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); rtRunRoundtable(); }
+  });
+  document.getElementById('btnRtHistory')?.addEventListener('click', rtLoadHistory);
+  document.getElementById('btnRtRefreshMemory')?.addEventListener('click', rtLoadMemory);
+  document.getElementById('btnRtSettle')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = '⏳ 结算中…';
+    try {
+      const stats = await API.post('/api/v1/roundtable/memory/settle', null, 90000);
+      toast(`结算完成：检查 ${stats.checked} 条，结算 ${stats.settled} 条`, 'success');
+      rtLoadMemory();
+    } catch (err) {
+      toast('结算失败：' + err.message, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = '🔄 结算到期决策';
+    }
+  });
 
   // -- Init --
   // 1) 渲染登录状态条

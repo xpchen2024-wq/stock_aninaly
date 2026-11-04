@@ -14,6 +14,8 @@ from app.api.backtest import router as backtest_router
 from app.api.capital import router as capital_router
 from app.api.insight import router as insight_router
 from app.api.forecast import router as forecast_router
+from app.api.market import router as market_router
+from app.api.roundtable import router as roundtable_router
 
 __all__ = [
     "auth_router",
@@ -29,4 +31,6 @@ __all__ = [
     "capital_router",
     "insight_router",
     "forecast_router",
+    "market_router",
+    "roundtable_router",
 ]
